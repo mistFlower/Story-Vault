@@ -35,17 +35,27 @@ fn resolve(root: &str, relative: &str) -> Result<PathBuf, String> {
     let joined = root.join(rel);
 
     // 심볼릭 링크로 루트를 빠져나가는 경우까지 막는다.
-    // 새 파일은 아직 존재하지 않으므로 부모 디렉터리를 기준으로 검사한다.
+    //
+    // 대상이 아직 없을 수 있다 — reference/novelpia.md 처럼 중간
+    // 디렉터리째로 없는 경우다. 바로 위 부모만 보고 canonicalize 하면
+    // 그때 os error 2 로 죽는다. 존재하는 가장 깊은 조상까지 거슬러
+    // 올라가 그것이 루트 안인지 검사한다.
+    //
+    // 위에서 `..` 와 절대 경로 성분을 이미 거부했으므로, 조상이 루트
+    // 안에 있으면 그 아래로 뻗은 경로도 루트를 벗어날 수 없다.
     let check = if joined.exists() {
         joined.canonicalize().map_err(|e| e.to_string())?
     } else {
-        let parent = joined
-            .parent()
-            .ok_or_else(|| "잘못된 경로입니다".to_string())?;
-        let parent = parent
+        let mut ancestor = joined.as_path();
+        loop {
+            match ancestor.parent() {
+                Some(p) if !ancestor.exists() => ancestor = p,
+                _ => break,
+            }
+        }
+        ancestor
             .canonicalize()
-            .map_err(|e| format!("상위 디렉터리를 찾을 수 없습니다: {e}"))?;
-        parent.join(joined.file_name().unwrap_or_default())
+            .map_err(|e| format!("상위 디렉터리를 찾을 수 없습니다: {e}"))?
     };
 
     if !check.starts_with(&root) {
@@ -1283,6 +1293,41 @@ mod tests {
         for p in [&["novelpia"][..], &["joara"][..], &[][..]] {
             assert!(brief(p, "E:/x").contains("AGENTS.md"));
         }
+    }
+
+    #[test]
+    fn 없는_하위폴더에도_경로를_해석한다() {
+        use super::resolve;
+        // reference/ 가 아직 없는 vault 에 기준 문서를 쓰는 상황.
+        // 예전에는 부모를 canonicalize 하다 os error 2 로 죽었다.
+        let dir = std::env::temp_dir().join("sv-resolve-test");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        let got = resolve(&root, "reference/novelpia.md");
+        assert!(got.is_ok(), "없는 하위 폴더에서 실패했다: {:?}", got.err());
+        assert!(got.unwrap().ends_with("novelpia.md"));
+
+        // 여러 단계가 통째로 없어도 된다.
+        assert!(resolve(&root, "a/b/c/d.md").is_ok());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn 루트_밖_경로는_거부한다() {
+        use super::resolve;
+        let dir = std::env::temp_dir().join("sv-resolve-test2");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let root = dir.to_string_lossy().to_string();
+
+        // 상위 이동은 성분 단계에서 막힌다.
+        assert!(resolve(&root, "../out.md").is_err());
+        assert!(resolve(&root, "a/../../out.md").is_err());
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
