@@ -21,6 +21,19 @@ export const isVault = (root: string) => invoke<boolean>('is_vault', { root })
 export const findVaultRoot = (picked: string) =>
   invoke<string | null>('find_vault_root', { picked })
 
+export interface VaultCandidate {
+  is_vault: boolean
+  is_empty: boolean
+  existing: string[]
+}
+
+/** 폴더가 새 vault를 만들기에 적합한지 살펴본다. */
+export const inspectFolder = (path: string) =>
+  invoke<VaultCandidate>('inspect_folder', { path })
+
+/** 폴더에 새 vault 구조를 만든다. 실제 vault 루트 경로를 돌려준다. */
+export const initVault = (path: string) => invoke<string>('init_vault', { path })
+
 /** Codex CLI가 설치되어 있는지. */
 export const codexAvailable = () => invoke<boolean>('codex_available')
 

@@ -14,6 +14,8 @@ import {
   saveRoot,
   codexAvailable,
   launchCodex,
+  inspectFolder,
+  initVault,
   type Entry,
 } from './lib/vault'
 import { parsePlatform, applyPlatform, PLATFORM_LABEL } from './lib/platform'
@@ -100,14 +102,34 @@ export default function App() {
     if (typeof picked !== 'string') return
 
     // 저장소 루트를 골라도 vault/ 하위를 찾아준다.
-    const found = await findVaultRoot(picked)
+    let found = await findVaultRoot(picked)
+
+    // vault 가 없으면 새로 만들 것인지 묻는다.
+    // 빈 폴더를 골라 새 작품을 시작하는 것이 자연스러운 흐름이다.
     if (!found) {
-      setError(
-        `이 폴더에서 vault를 찾지 못했습니다: ${picked}\n` +
-          'AGENTS.md 가 있는 폴더이거나, 그 폴더를 담고 있는 상위 폴더를 선택해 주세요.',
-      )
-      return
+      try {
+        const info = await inspectFolder(picked)
+        const preview = info.is_empty
+          ? '이 폴더는 비어 있습니다.'
+          : `이 폴더에는 이미 파일이 있습니다: ${info.existing.join(', ')}`
+
+        if (
+          !confirm(
+            `${picked}\n\n${preview}\n\n` +
+              '여기에 새 집필 vault를 만들까요?\n' +
+              'AGENTS.md, canon/, plot/, state/, episodes/ 등이 생성됩니다.\n' +
+              '기존 파일은 덮어쓰지 않습니다.',
+          )
+        ) {
+          return
+        }
+        found = await initVault(picked)
+      } catch (e) {
+        setError(String(e))
+        return
+      }
     }
+
     setError(null)
     setRoot(found)
     saveRoot(found)
@@ -197,7 +219,9 @@ export default function App() {
         </button>
         {error && <p className="error">{error}</p>}
         <p className="hint">
-          저장소 루트를 선택하면 <code>vault</code> 폴더를 자동으로 찾습니다.
+          기존 vault를 열거나, <strong>빈 폴더를 선택해 새 작품을 시작</strong>할 수 있습니다.
+          <br />
+          새 폴더를 고르면 <code>AGENTS.md</code>와 집필 구조를 만들어 드립니다.
         </p>
       </div>
     )

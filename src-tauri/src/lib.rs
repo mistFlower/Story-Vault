@@ -180,6 +180,106 @@ fn find_vault_root(picked: String) -> Option<String> {
     None
 }
 
+// ── 새 vault 만들기 ─────────────────────────────────────────
+
+/// 앱에 내장된 vault 템플릿.
+///
+/// 저장소의 `templates/vault/` 를 그대로 굽는다. 작업용 `vault/` 가 아니라
+/// 템플릿을 쓰는 이유는, 그쪽에 실제 원고가 쌓이면 새 작품을 만들 때
+/// 남의 원고가 딸려 들어가기 때문이다.
+const TEMPLATE: &[(&str, &str)] = &[
+    ("AGENTS.md", include_str!("../../templates/vault/AGENTS.md")),
+    ("PLATFORM.md", include_str!("../../templates/vault/PLATFORM.md")),
+    ("canon/world.md", include_str!("../../templates/vault/canon/world.md")),
+    ("canon/characters.md", include_str!("../../templates/vault/canon/characters.md")),
+    ("canon/terminology.md", include_str!("../../templates/vault/canon/terminology.md")),
+    ("plot/master_plot.md", include_str!("../../templates/vault/plot/master_plot.md")),
+    ("plot/current_arc.md", include_str!("../../templates/vault/plot/current_arc.md")),
+    ("plot/foreshadowing.md", include_str!("../../templates/vault/plot/foreshadowing.md")),
+    ("state/continuity.md", include_str!("../../templates/vault/state/continuity.md")),
+    ("analytics/reader_feedback.md", include_str!("../../templates/vault/analytics/reader_feedback.md")),
+    ("analytics/episode_metrics.md", include_str!("../../templates/vault/analytics/episode_metrics.md")),
+    ("prompts/COMMANDS.md", include_str!("../../templates/vault/prompts/COMMANDS.md")),
+    ("archive/deprecated_settings.md", include_str!("../../templates/vault/archive/deprecated_settings.md")),
+];
+
+/// 원고가 들어갈 빈 디렉터리.
+const TEMPLATE_DIRS: &[&str] = &["episodes/published", "episodes/drafts"];
+
+/// 폴더가 새 vault 를 만들기에 적합한지 살펴본다.
+#[derive(Serialize)]
+pub struct VaultCandidate {
+    /// 이미 vault 인가 (AGENTS.md 존재)
+    is_vault: bool,
+    /// 비어 있는가 (숨김 파일 제외)
+    is_empty: bool,
+    /// 비어 있지 않다면 눈에 띄는 항목 몇 개
+    existing: Vec<String>,
+}
+
+#[tauri::command]
+fn inspect_folder(path: String) -> Result<VaultCandidate, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err("폴더가 아닙니다".into());
+    }
+
+    let mut existing: Vec<String> = Vec::new();
+    if let Ok(iter) = fs::read_dir(dir) {
+        for item in iter.flatten() {
+            let name = item.file_name().to_string_lossy().to_string();
+            if is_hidden(&name) {
+                continue;
+            }
+            existing.push(name);
+            if existing.len() >= 8 {
+                break;
+            }
+        }
+    }
+    existing.sort();
+
+    Ok(VaultCandidate {
+        is_vault: dir.join("AGENTS.md").is_file(),
+        is_empty: existing.is_empty(),
+        existing,
+    })
+}
+
+/// 지정한 폴더에 새 vault 구조를 만든다.
+///
+/// 이미 AGENTS.md 가 있으면 거부한다 — 기존 작품을 덮어쓰는 사고를 막는다.
+#[tauri::command]
+fn init_vault(path: String) -> Result<String, String> {
+    let dir = Path::new(&path);
+    if !dir.is_dir() {
+        return Err("폴더가 아닙니다".into());
+    }
+    if dir.join("AGENTS.md").is_file() {
+        return Err("이미 vault 입니다. 덮어쓰지 않습니다.".into());
+    }
+
+    for (rel, contents) in TEMPLATE {
+        let target = dir.join(rel);
+        // 혹시 일부 파일만 있는 폴더라면 기존 파일은 건드리지 않는다.
+        if target.exists() {
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("{rel}: 디렉터리 생성 실패: {e}"))?;
+        }
+        fs::write(&target, contents).map_err(|e| format!("{rel}: 쓰기 실패: {e}"))?;
+    }
+
+    for rel in TEMPLATE_DIRS {
+        fs::create_dir_all(dir.join(rel)).map_err(|e| format!("{rel}: 디렉터리 생성 실패: {e}"))?;
+    }
+
+    dir.canonicalize()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| format!("경로 확인 실패: {e}"))
+}
+
 // ── 플랫폼 로그인 ───────────────────────────────────────────
 
 /// 플랫폼별 로그인 페이지와, 로그인 여부를 판별할 쿠키 이름.
@@ -344,6 +444,8 @@ pub fn run() {
             write_file,
             is_vault,
             find_vault_root,
+            inspect_folder,
+            init_vault,
             codex_available,
             launch_codex,
             open_login_window,
