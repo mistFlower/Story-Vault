@@ -758,11 +758,13 @@ fn codex_available() -> bool {
 ///
 /// Codex 는 AGENTS.md 를 자동으로 읽지만, 플랫폼 기준 문서는 스스로 찾지
 /// 않는다. 어떤 플랫폼인지와 어느 파일을 읽어야 하는지 명시해 준다.
-pub fn codex_briefing(platform: Option<&str>) -> String {
-    let mut s = String::from(
-        "이 저장소는 웹소설 장기 연재 프로젝트다. 작업을 시작하기 전에 다음을 읽어라.\n\n\
+pub fn codex_briefing(platform: Option<&str>, workdir: &str) -> String {
+    let mut s = format!(
+        "작업 폴더는 {workdir} 이다. 이 폴더 안에서만 작업한다.\n\
+         다른 프로젝트나 이전 대화의 주제로 넘어가지 않는다.\n\n\
+         이 폴더는 웹소설 장기 연재 프로젝트다. 시작하기 전에 다음을 읽어라.\n\n\
          1. AGENTS.md — 집필과 편집의 절대 규칙. 여기 적힌 것을 그대로 따른다.\n\
-         2. PLATFORM.md — 대상 플랫폼과 분량 기준.\n",
+         2. PLATFORM.md — 대상 플랫폼과 분량 기준.\n"
     );
 
     match platform {
@@ -789,6 +791,7 @@ pub fn codex_briefing(platform: Option<&str>) -> String {
 
     s.push_str(
         "\n설정을 임의로 확정하지 마라. canon/ 이 비어 있으면 먼저 사용자와 함께 채운다.\n\
+         이 프로젝트와 무관한 조사나 개발 작업은 하지 않는다.\n\
          준비되면 무엇부터 할지 물어라.",
     );
 
@@ -846,10 +849,16 @@ fn terminal_spawn(
         })
         .map_err(|e| format!("PTY 생성 실패: {e}"))?;
 
+    let workdir = dir.to_string_lossy().replace(r"\\?\", "");
+
     let mut cmd = CommandBuilder::new(codex_command());
     cmd.arg(CODEX_FLAGS);
+    // 작업 루트를 명시한다. 프로세스 cwd 만으로는 Codex 가 다른 루트를
+    // 잡을 수 있어, 이전 대화나 다른 프로젝트로 새는 원인이 된다.
+    cmd.arg("--cd");
+    cmd.arg(&workdir);
     // 브리핑을 인자로 그대로 넘긴다. 셸을 거치지 않으므로 따옴표 처리가 필요 없다.
-    cmd.arg(codex_briefing(platform.as_deref()));
+    cmd.arg(codex_briefing(platform.as_deref(), &workdir));
     cmd.cwd(&dir);
 
     let child = pair
@@ -990,7 +999,7 @@ mod tests {
 
     #[test]
     fn 노벨피아는_글자수_기준을_알려준다() {
-        let s = codex_briefing(Some("novelpia"));
+        let s = codex_briefing(Some("novelpia"), "E:/x");
         assert!(s.contains("노벨피아"));
         assert!(s.contains("3,300~4,200자"));
         // 조아라 기준이 섞이면 안 된다
@@ -999,7 +1008,7 @@ mod tests {
 
     #[test]
     fn 조아라는_KB_기준을_알려준다() {
-        let s = codex_briefing(Some("joara"));
+        let s = codex_briefing(Some("joara"), "E:/x");
         assert!(s.contains("조아라"));
         assert!(s.contains("10KB"));
         // 노벨피아 목표치가 섞이면 안 된다
@@ -1008,7 +1017,7 @@ mod tests {
 
     #[test]
     fn 미설정이면_먼저_물어보게_한다() {
-        let s = codex_briefing(None);
+        let s = codex_briefing(None, "E:/x");
         assert!(s.contains("먼저 물어라"));
         assert!(!s.contains("3,300"));
         assert!(!s.contains("10KB"));
@@ -1017,12 +1026,19 @@ mod tests {
     #[test]
     fn 항상_agents_md_를_먼저_읽게_한다() {
         for p in [Some("novelpia"), Some("joara"), None] {
-            assert!(codex_briefing(p).contains("AGENTS.md"));
+            assert!(codex_briefing(p, "E:/x").contains("AGENTS.md"));
         }
     }
 
     #[test]
+    fn 작업_폴더를_명시한다() {
+        let s = codex_briefing(Some("novelpia"), "E:/소설/노벨피아");
+        assert!(s.contains("E:/소설/노벨피아"));
+        assert!(s.contains("이 폴더 안에서만 작업한다"));
+    }
+
+    #[test]
     fn 설정을_임의로_확정하지_말라고_지시한다() {
-        assert!(codex_briefing(Some("novelpia")).contains("임의로 확정하지 마라"));
+        assert!(codex_briefing(Some("novelpia"), "E:/x").contains("임의로 확정하지 마라"));
     }
 }
