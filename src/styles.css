@@ -119,6 +119,47 @@ button.primary {
   font-size: 12px;
 }
 
+.topbar button.codex {
+  border-color: #3a4a7a;
+  color: var(--accent);
+}
+.topbar button.codex:hover:not(:disabled) {
+  background: #22283d;
+}
+
+/* 대상 플랫폼 선택 */
+.platform-picker {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin-left: 14px;
+}
+.platform-picker .seg {
+  border-radius: 0;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: transparent;
+}
+.platform-picker .seg:first-child {
+  border-radius: 6px 0 0 6px;
+}
+.platform-picker .seg:last-of-type {
+  border-radius: 0 6px 6px 0;
+  border-left-width: 0;
+}
+.platform-picker .seg.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10101a;
+  font-weight: 600;
+}
+.platform-picker .unset {
+  margin-left: 8px;
+  font-size: 11px;
+  color: var(--warn);
+}
+
 .body {
   flex: 1;
   display: flex;
@@ -235,6 +276,11 @@ button.primary {
   display: flex;
   flex-direction: column;
   gap: 5px;
+}
+/* 대상이 아닌 플랫폼은 참고용으로 흐리게 둔다. 숨기지는 않는다 —
+   양쪽 기준을 동시에 보는 것이 이 게이지의 요점이기 때문이다. */
+.gauge:not(.active) {
+  opacity: 0.42;
 }
 .gauge-head {
   display: flex;

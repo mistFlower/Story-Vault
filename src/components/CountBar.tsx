@@ -1,11 +1,15 @@
 import { countAll, judge, remaining, THRESHOLDS, type Platform } from '../lib/count'
+import { PLATFORM_LABEL as LABEL } from '../lib/platform'
 
-const LABEL: Record<Platform, string> = {
-  novelpia: '노벨피아',
-  joara: '조아라',
-}
-
-function Gauge({ platform, text }: { platform: Platform; text: string }) {
+function Gauge({
+  platform,
+  text,
+  active,
+}: {
+  platform: Platform
+  text: string
+  active: boolean
+}) {
   const counts = countAll(text)
   const t = THRESHOLDS[platform]
   const verdict = judge(platform, counts)
@@ -22,7 +26,7 @@ function Gauge({ platform, text }: { platform: Platform; text: string }) {
   const minPct = Math.min(100, (t.min / t.targetHigh) * 100)
 
   return (
-    <div className={`gauge ${verdict}`}>
+    <div className={`gauge ${verdict}${active ? ' active' : ''}`}>
       <div className="gauge-head">
         <span className="platform">{LABEL[platform]}</span>
         <span className="value">
@@ -48,13 +52,20 @@ function Gauge({ platform, text }: { platform: Platform; text: string }) {
   )
 }
 
-export default function CountBar({ text }: { text: string }) {
+export default function CountBar({
+  text,
+  platform,
+}: {
+  text: string
+  /** 선택된 대상 플랫폼. null이면 둘 다 동등하게 보여준다. */
+  platform: Platform | null
+}) {
   const counts = countAll(text)
 
   return (
     <footer className="countbar">
-      <Gauge platform="novelpia" text={text} />
-      <Gauge platform="joara" text={text} />
+      <Gauge platform="novelpia" text={text} active={platform !== 'joara'} />
+      <Gauge platform="joara" text={text} active={platform !== 'novelpia'} />
       <div className="raw">
         <div>
           <span>전체</span>

@@ -144,6 +144,108 @@ fn is_vault(root: String) -> bool {
     Path::new(&root).join("AGENTS.md").is_file()
 }
 
+/// 선택한 폴더에서 실제 vault 루트를 찾아낸다.
+///
+/// 저장소 루트에는 앱 소스가 있고 원고는 `vault/` 하위에 있다.
+/// 사용자가 저장소 루트를 고르는 것이 자연스러우므로 한 단계 아래까지 찾아본다.
+/// 반대로 `vault/canon` 처럼 안쪽을 골랐다면 위로 올라가며 찾는다.
+#[tauri::command]
+fn find_vault_root(picked: String) -> Option<String> {
+    let start = Path::new(&picked);
+
+    // 1. 고른 폴더 자체
+    if start.join("AGENTS.md").is_file() {
+        return Some(picked);
+    }
+
+    // 2. 흔한 하위 폴더 이름
+    for name in ["vault", "Vault"] {
+        let candidate = start.join(name);
+        if candidate.join("AGENTS.md").is_file() {
+            return Some(candidate.to_string_lossy().to_string());
+        }
+    }
+
+    // 3. 상위로 거슬러 올라가며 찾는다 (최대 4단계)
+    let mut current = start;
+    for _ in 0..4 {
+        let Some(parent) = current.parent() else { break };
+        if parent.join("AGENTS.md").is_file() {
+            return Some(parent.to_string_lossy().to_string());
+        }
+        current = parent;
+    }
+
+    None
+}
+
+// ── Codex 연동 ──────────────────────────────────────────────
+
+/// 사용자가 지정한 Codex 실행 플래그.
+///
+/// 승인 절차와 샌드박스를 모두 끄는 옵션이다. 사용자가 자신의 워크플로로
+/// 명시한 값이므로 그대로 쓰되, 앱이 임의로 자동 실행하지는 않는다 —
+/// 반드시 사용자가 버튼을 눌러야 뜬다.
+const CODEX_FLAGS: &str = "--dangerously-bypass-approvals-and-sandbox";
+
+fn codex_command() -> &'static str {
+    if cfg!(windows) {
+        "codex.cmd"
+    } else {
+        "codex"
+    }
+}
+
+/// Codex가 PATH에 있는지 확인한다.
+#[tauri::command]
+fn codex_available() -> bool {
+    std::process::Command::new(codex_command())
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+/// vault 디렉터리에서 Codex를 새 터미널 창으로 띄운다.
+///
+/// Codex는 대화형 TUI라서 앱 안에 출력만 받아오면 쓸 수 없다.
+/// 별도 콘솔 창을 열어 사용자가 직접 대화하게 한다.
+#[tauri::command]
+fn launch_codex(root: String) -> Result<(), String> {
+    let dir = Path::new(&root)
+        .canonicalize()
+        .map_err(|e| format!("vault 경로를 찾을 수 없습니다: {e}"))?;
+
+    if !dir.join("AGENTS.md").is_file() {
+        return Err("AGENTS.md 가 없어 vault 로 보이지 않습니다".into());
+    }
+
+    #[cfg(windows)]
+    {
+        // `start` 는 cmd 내장 명령이라 cmd 를 거쳐야 한다.
+        // 첫 따옴표 인자는 창 제목으로 소비되므로 빈 제목을 넣어준다.
+        std::process::Command::new("cmd")
+            .args(["/C", "start", "Story Vault - Codex", "cmd", "/K"])
+            .arg(format!("{} {}", codex_command(), CODEX_FLAGS))
+            .current_dir(&dir)
+            .spawn()
+            .map_err(|e| format!("Codex 실행 실패: {e}"))?;
+    }
+
+    #[cfg(not(windows))]
+    {
+        std::process::Command::new(codex_command())
+            .arg(CODEX_FLAGS)
+            .current_dir(&dir)
+            .spawn()
+            .map_err(|e| format!("Codex 실행 실패: {e}"))?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
@@ -160,7 +262,10 @@ pub fn run() {
             list_tree,
             read_file,
             write_file,
-            is_vault
+            is_vault,
+            find_vault_root,
+            codex_available,
+            launch_codex
         ])
         .run(tauri::generate_context!())
         .expect("Story Vault 실행에 실패했습니다");
