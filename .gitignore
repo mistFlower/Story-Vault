@@ -1,0 +1,14 @@
+# 참고용 업스트림 클론 (별도 git 저장소) — 버전 관리 제외
+/tauri_src/
+
+# 빌드 산출물
+/target/
+/dist/
+node_modules/
+
+# OS / 편집기
+Thumbs.db
+Desktop.ini
+.DS_Store
+.idea/
+.vscode/
