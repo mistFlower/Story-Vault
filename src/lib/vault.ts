@@ -27,6 +27,13 @@ export const codexAvailable = () => invoke<boolean>('codex_available')
 /** vault 디렉터리에서 Codex를 새 터미널 창으로 실행한다. */
 export const launchCodex = (root: string) => invoke<void>('launch_codex', { root })
 
+/** 플랫폼 로그인 창을 연다. 로그인은 사용자가 직접 수행한다. */
+export const openLoginWindow = (platform: string) =>
+  invoke<void>('open_login_window', { platform })
+
+/** 해당 플랫폼의 세션 쿠키가 있는지. */
+export const isLoggedIn = (platform: string) => invoke<boolean>('is_logged_in', { platform })
+
 const ROOT_KEY = 'story-vault:root'
 
 export const loadSavedRoot = () => localStorage.getItem(ROOT_KEY)

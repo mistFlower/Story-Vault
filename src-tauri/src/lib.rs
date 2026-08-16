@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Component, Path, PathBuf};
 
 use serde::Serialize;
+use tauri::Manager;
 
 /// 파일 트리의 한 항목.
 #[derive(Serialize)]
@@ -179,6 +180,85 @@ fn find_vault_root(picked: String) -> Option<String> {
     None
 }
 
+// ── 플랫폼 로그인 ───────────────────────────────────────────
+
+/// 플랫폼별 로그인 페이지와, 로그인 여부를 판별할 쿠키 이름.
+///
+/// 두 플랫폼 모두 공개 API 와 토큰 발급이 없다. 로그인으로 얻을 수 있는
+/// 것은 세션 쿠키뿐이므로, 로그인은 WebView 안에서 사용자가 직접 한다.
+/// 캡차·2단계 인증·소셜 로그인을 우회하지 않는다는 뜻이기도 하다.
+struct PlatformSite {
+    label: &'static str,
+    login_url: &'static str,
+    /// 로그인 성공 시 세션 쿠키가 설정되는 도메인
+    domain: &'static str,
+}
+
+fn platform_site(platform: &str) -> Result<PlatformSite, String> {
+    match platform {
+        "novelpia" => Ok(PlatformSite {
+            label: "노벨피아",
+            login_url: "https://novelpia.com/login/",
+            domain: "novelpia.com",
+        }),
+        "joara" => Ok(PlatformSite {
+            label: "조아라",
+            login_url: "https://www.joara.com/login",
+            domain: "joara.com",
+        }),
+        other => Err(format!("알 수 없는 플랫폼입니다: {other}")),
+    }
+}
+
+/// 플랫폼 로그인 창을 연다. 로그인은 사용자가 직접 수행한다.
+#[tauri::command]
+async fn open_login_window(app: tauri::AppHandle, platform: String) -> Result<(), String> {
+    let site = platform_site(&platform)?;
+    let label = format!("login-{platform}");
+
+    // 이미 열려 있으면 앞으로 가져온다.
+    if let Some(win) = app.get_webview_window(&label) {
+        let _ = win.set_focus();
+        return Ok(());
+    }
+
+    let url = tauri::WebviewUrl::External(
+        site.login_url
+            .parse()
+            .map_err(|e| format!("주소가 잘못되었습니다: {e}"))?,
+    );
+
+    tauri::WebviewWindowBuilder::new(&app, &label, url)
+        .title(format!("{} 로그인", site.label))
+        .inner_size(980.0, 800.0)
+        .build()
+        .map_err(|e| format!("로그인 창을 열지 못했습니다: {e}"))?;
+
+    Ok(())
+}
+
+/// 해당 플랫폼의 세션 쿠키가 있는지 확인한다.
+///
+/// 쿠키 이름은 플랫폼마다 다르고 공개되어 있지 않으므로,
+/// 도메인에 쿠키가 하나라도 있는지로 느슨하게 판별한다.
+/// 확실한 로그인 판별은 실제 작가 페이지 응답을 봐야 가능하다.
+#[tauri::command]
+async fn is_logged_in(app: tauri::AppHandle, platform: String) -> Result<bool, String> {
+    let site = platform_site(&platform)?;
+
+    let Some(win) = app.get_webview_window(&format!("login-{platform}")) else {
+        return Ok(false);
+    };
+
+    let cookies = win.cookies().map_err(|e| format!("쿠키 조회 실패: {e}"))?;
+
+    Ok(cookies.iter().any(|c| {
+        c.domain()
+            .map(|d| d.trim_start_matches('.').ends_with(site.domain))
+            .unwrap_or(false)
+    }))
+}
+
 // ── Codex 연동 ──────────────────────────────────────────────
 
 /// 사용자가 지정한 Codex 실행 플래그.
@@ -265,7 +345,9 @@ pub fn run() {
             is_vault,
             find_vault_root,
             codex_available,
-            launch_codex
+            launch_codex,
+            open_login_window,
+            is_logged_in
         ])
         .run(tauri::generate_context!())
         .expect("Story Vault 실행에 실패했습니다");

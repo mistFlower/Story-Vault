@@ -119,6 +119,34 @@ button.primary {
   font-size: 12px;
 }
 
+/* 플랫폼 로그인 상태 */
+.login-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+}
+.login-status .badge {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--bg-3);
+  color: var(--fg-dim);
+  border: 1px solid var(--line);
+}
+.login-status .badge.on {
+  color: var(--ok);
+  border-color: #2c5c44;
+}
+.login-status .checking {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+button.small {
+  padding: 3px 9px;
+  font-size: 11px;
+}
+
 .topbar button.codex {
   border-color: #3a4a7a;
   color: var(--accent);

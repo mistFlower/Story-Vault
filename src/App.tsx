@@ -3,6 +3,7 @@ import { open } from '@tauri-apps/plugin-dialog'
 import FileTree from './components/FileTree'
 import CountBar from './components/CountBar'
 import UpdateBanner from './components/UpdateBanner'
+import LoginStatus from './components/LoginStatus'
 import {
   listTree,
   readFile,
@@ -223,6 +224,8 @@ export default function App() {
           ))}
           {platform === null && <span className="unset">미설정</span>}
         </div>
+
+        <LoginStatus platform={platform} />
 
         <div className="spacer" />
         {status && <span className="status">{status}</span>}
