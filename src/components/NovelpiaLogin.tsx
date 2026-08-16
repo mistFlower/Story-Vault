@@ -6,6 +6,8 @@ export interface Session {
   platform: string
   name: string
   masked: string
+  /** 마지막 검증 결과. 아직 검증 전이면 null. */
+  valid: boolean | null
 }
 
 /**
@@ -58,10 +60,20 @@ export default function NovelpiaLogin({
   }
 
   if (session) {
+    // valid === null 은 아직 확인 전이다. 만료를 확정한 것이 아니므로
+    // 로그아웃으로 표시하지 않는다.
+    const label =
+      session.valid === false ? '만료됨' : session.valid === true ? '로그인됨' : '확인 중'
     return (
       <div className="np-login">
-        <span className="badge on">로그인됨</span>
-        <span className="key" title={`${session.name} 세션 보유 중`}>
+        <span className={session.valid === false ? 'badge' : 'badge on'}>{label}</span>
+        <span
+          className="key"
+          title={
+            `${session.name} 세션을 로컬에 보관 중입니다.\n` +
+            '앱을 껐다 켜도 유지되며, 10분마다 유효한지 확인합니다.'
+          }
+        >
           {session.name} {session.masked}
         </span>
         <button className="ghost small" onClick={() => void logout()}>

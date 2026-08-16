@@ -497,26 +497,105 @@ fn platform_site(platform: &str) -> Result<PlatformSite, String> {
     }
 }
 
-/// 로그인 창에서 얻은 세션.
-#[derive(Serialize, Clone)]
-pub struct Session {
+/// 디스크에 보관하는 세션. 값을 포함한다.
+///
+/// 앱을 껐다 켤 때마다 다시 로그인하게 만들 수는 없으므로 저장한다.
+/// 저장 위치는 앱 설정 디렉터리다 — vault 안에 두면 원고와 함께
+/// 커밋되거나 공유되어 계정이 통째로 넘어간다.
+#[derive(Serialize, serde::Deserialize, Clone)]
+struct StoredSession {
     platform: String,
     /// 세션 쿠키 이름 (노벨피아면 LOGINKEY)
     name: String,
-    /// 값은 프런트엔드로 보내지 않는다. 화면에 띄울 이유가 없고,
-    /// 웹뷰 콘솔이나 로그로 새어나갈 여지를 만들지 않기 위해서다.
-    ///
-    /// 작가 페이지 조회 요청에 실어 보낼 값이다. 조회 계층이 아직 없어
-    /// 지금은 읽는 곳이 없다.
-    #[serde(skip)]
-    #[allow(dead_code)]
     value: String,
-    /// 사람이 보기 위한 가림 표시 (앞 4자리만)
+}
+
+/// 프런트엔드로 내려보내는 형태. 값은 빼고 가림 표시만 준다.
+///
+/// 화면에 띄울 이유가 없고, 웹뷰 콘솔이나 로그로 새어나갈 여지를
+/// 만들지 않기 위해서다.
+#[derive(Serialize, Clone)]
+pub struct Session {
+    platform: String,
+    name: String,
     masked: String,
+    /// 마지막 검증 결과. 아직 검증하지 않았으면 None.
+    valid: Option<bool>,
+}
+
+impl StoredSession {
+    fn public(&self, valid: Option<bool>) -> Session {
+        Session {
+            platform: self.platform.clone(),
+            name: self.name.clone(),
+            masked: format!("{}…", self.value.chars().take(4).collect::<String>()),
+            valid,
+        }
+    }
 }
 
 #[derive(Default)]
-pub struct SessionState(std::sync::Mutex<Option<Session>>);
+pub struct SessionState {
+    inner: std::sync::Mutex<Option<StoredSession>>,
+    valid: std::sync::Mutex<Option<bool>>,
+}
+
+fn session_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = app
+        .path()
+        .app_config_dir()
+        .map_err(|e| format!("설정 디렉터리를 찾을 수 없습니다: {e}"))?;
+    fs::create_dir_all(&dir).map_err(|e| format!("설정 디렉터리 생성 실패: {e}"))?;
+    Ok(dir.join("session.json"))
+}
+
+fn save_session(app: &tauri::AppHandle, s: &StoredSession) -> Result<(), String> {
+    let path = session_file(app)?;
+    let json = serde_json::to_string(s).map_err(|e| e.to_string())?;
+    fs::write(&path, json).map_err(|e| format!("세션 저장 실패: {e}"))
+}
+
+fn load_session(app: &tauri::AppHandle) -> Option<StoredSession> {
+    let path = session_file(app).ok()?;
+    let text = fs::read_to_string(path).ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+fn forget_session(app: &tauri::AppHandle) {
+    if let Ok(p) = session_file(app) {
+        let _ = fs::remove_file(p);
+    }
+}
+
+/// 보관 중인 세션이 아직 살아 있는지 노벨피아에 물어본다.
+///
+/// 로그인 페이지를 요청해 비밀번호 필드(name="wd")가 보이면 로그아웃
+/// 상태다. 세션이 살아 있으면 그 폼이 나오지 않는다.
+/// 사이트 개편에 취약한 판정이라 표식이 바뀌면 여기를 고쳐야 한다.
+async fn probe_novelpia(value: &str) -> Result<bool, String> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(15))
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let body = client
+        .get("https://novelpia.com/login/")
+        .header("Cookie", format!("LOGINKEY={value};"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+             (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        )
+        .send()
+        .await
+        .map_err(|e| format!("노벨피아에 연결하지 못했습니다: {e}"))?
+        .text()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(!body.contains("name=\"wd\""))
+}
+
 
 /// 로그인 창의 쿠키에서 세션을 꺼내 보관한다.
 ///
@@ -560,27 +639,92 @@ async fn capture_session(
         return Ok(None);
     };
 
-    let masked = format!("{}…", value.chars().take(4).collect::<String>());
-    let session = Session {
+    let stored = StoredSession {
         platform: platform.clone(),
         name,
         value,
-        masked,
     };
 
-    *state.0.lock().unwrap() = Some(session.clone());
-    Ok(Some(session))
+    // 디스크에도 남긴다. 로그인 창을 닫거나 앱을 재시작해도 유지되어야 한다.
+    save_session(&app, &stored)?;
+    let public = stored.public(None);
+    *state.inner.lock().unwrap() = Some(stored);
+    *state.valid.lock().unwrap() = None;
+    Ok(Some(public))
 }
 
-/// 현재 보관 중인 세션 정보 (값 제외).
+/// 보관 중인 세션 정보 (값 제외).
+///
+/// 메모리에 없으면 디스크에서 불러온다. 앱을 껐다 켜도 로그인이
+/// 유지되어야 하기 때문이다.
 #[tauri::command]
-fn current_session(state: tauri::State<'_, SessionState>) -> Option<Session> {
-    state.0.lock().unwrap().clone()
+fn current_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+) -> Option<Session> {
+    let valid = *state.valid.lock().unwrap();
+
+    {
+        let guard = state.inner.lock().unwrap();
+        if let Some(s) = guard.as_ref() {
+            return Some(s.public(valid));
+        }
+    }
+
+    let loaded = load_session(&app)?;
+    let public = loaded.public(valid);
+    *state.inner.lock().unwrap() = Some(loaded);
+    Some(public)
 }
 
 #[tauri::command]
-fn clear_session(state: tauri::State<'_, SessionState>) {
-    *state.0.lock().unwrap() = None;
+fn clear_session(app: tauri::AppHandle, state: tauri::State<'_, SessionState>) {
+    *state.inner.lock().unwrap() = None;
+    *state.valid.lock().unwrap() = None;
+    forget_session(&app);
+}
+
+/// 보관된 세션이 아직 살아 있는지 확인한다. 만료됐으면 지운다.
+///
+/// 프런트엔드가 주기적으로 부른다. 요청 자체가 세션 유지 역할도 한다.
+#[tauri::command]
+async fn verify_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+) -> Result<Option<Session>, String> {
+    // 메모리에 없으면 디스크에서 복원한다.
+    let stored = {
+        let mut guard = state.inner.lock().unwrap();
+        if guard.is_none() {
+            *guard = load_session(&app);
+        }
+        guard.clone()
+    };
+
+    let Some(stored) = stored else {
+        return Ok(None);
+    };
+
+    // 조아라는 검증 경로가 확인되지 않았다. 판정하지 않는다.
+    if stored.platform != "novelpia" {
+        return Ok(Some(stored.public(None)));
+    }
+
+    match probe_novelpia(&stored.value).await {
+        Ok(true) => {
+            *state.valid.lock().unwrap() = Some(true);
+            Ok(Some(stored.public(Some(true))))
+        }
+        Ok(false) => {
+            // 만료된 세션을 들고 있어 봐야 쓸 데가 없다.
+            *state.inner.lock().unwrap() = None;
+            *state.valid.lock().unwrap() = Some(false);
+            forget_session(&app);
+            Ok(None)
+        }
+        // 네트워크 문제와 만료를 구별한다. 연결 실패로 로그아웃시키지 않는다.
+        Err(e) => Err(e),
+    }
 }
 
 // ── 국내 노벨피아 직접 로그인 ───────────────────────────────
@@ -616,6 +760,7 @@ fn generate_loginkey() -> String {
 /// 그 경우 로그인 창(WebView)을 쓰고 capture_session 으로 세션을 가져온다.
 #[tauri::command]
 async fn novelpia_login(
+    app: tauri::AppHandle,
     state: tauri::State<'_, SessionState>,
     email: String,
     password: String,
@@ -672,16 +817,18 @@ async fn novelpia_login(
         });
     }
 
-    let masked = format!("{}…", loginkey.chars().take(4).collect::<String>());
-    let session = Session {
+    let stored = StoredSession {
         platform: "novelpia".into(),
         name: "LOGINKEY".into(),
         value: loginkey,
-        masked,
     };
 
-    *state.0.lock().unwrap() = Some(session.clone());
-    Ok(session)
+    // 앱을 껐다 켜도 로그인이 유지되도록 디스크에 남긴다.
+    save_session(&app, &stored)?;
+    let public = stored.public(Some(true));
+    *state.inner.lock().unwrap() = Some(stored);
+    *state.valid.lock().unwrap() = Some(true);
+    Ok(public)
 }
 
 /// 플랫폼 로그인 창을 연다. 로그인은 사용자가 직접 수행한다.
@@ -711,15 +858,36 @@ async fn open_login_window(app: tauri::AppHandle, platform: String) -> Result<()
     Ok(())
 }
 
-/// 해당 플랫폼의 세션 쿠키가 있는지 확인한다.
+/// 해당 플랫폼에 로그인되어 있는지 확인한다.
 ///
-/// 쿠키 이름은 플랫폼마다 다르고 공개되어 있지 않으므로,
-/// 도메인에 쿠키가 하나라도 있는지로 느슨하게 판별한다.
-/// 확실한 로그인 판별은 실제 작가 페이지 응답을 봐야 가능하다.
+/// 보관된 세션이 있으면 그것으로 판단한다. 로그인 창을 닫았다고
+/// 로그아웃으로 보이면 안 되기 때문이다.
+/// 보관된 것이 없을 때만 열려 있는 로그인 창의 쿠키를 본다.
 #[tauri::command]
-async fn is_logged_in(app: tauri::AppHandle, platform: String) -> Result<bool, String> {
+async fn is_logged_in(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+    platform: String,
+) -> Result<bool, String> {
     let site = platform_site(&platform)?;
 
+    // 보관된 세션이 먼저다. 로그인 창이 닫혀 있어도 로그인 상태여야 한다.
+    {
+        let guard = state.inner.lock().unwrap();
+        if let Some(s) = guard.as_ref() {
+            if s.platform == platform {
+                return Ok(true);
+            }
+        }
+    }
+    if let Some(s) = load_session(&app) {
+        if s.platform == platform {
+            *state.inner.lock().unwrap() = Some(s);
+            return Ok(true);
+        }
+    }
+
+    // 아직 못 가져왔으면 열려 있는 로그인 창의 쿠키를 본다.
     let Some(win) = app.get_webview_window(&format!("login-{platform}")) else {
         return Ok(false);
     };
@@ -1060,6 +1228,7 @@ pub fn run() {
             capture_session,
             current_session,
             clear_session,
+            verify_session,
             novelpia_login
         ])
         .run(tauri::generate_context!())
