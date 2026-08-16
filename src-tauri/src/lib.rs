@@ -994,6 +994,127 @@ fn codex_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Codex 사용 가능 여부와, 안 되면 그 이유.
+///
+/// 이 앱은 Codex 없이는 할 수 있는 일이 없다. 그래서 시작할 때 한 번
+/// 확인하고, 막혀 있으면 무엇을 해야 하는지 알려준 뒤 종료한다.
+/// 원인을 뭉뚱그리면 사용자가 뭘 고쳐야 할지 알 수 없으므로 단계별로 나눈다.
+#[derive(Serialize)]
+pub struct CodexStatus {
+    ok: bool,
+    /// 문제 단계: node | codex | run | login
+    stage: String,
+    title: String,
+    message: String,
+    /// 사용자가 실행할 명령 (있으면)
+    command: Option<String>,
+}
+
+#[tauri::command]
+fn codex_diagnose() -> CodexStatus {
+    let bad = |stage: &str, title: &str, message: &str, command: Option<&str>| CodexStatus {
+        ok: false,
+        stage: stage.into(),
+        title: title.into(),
+        message: message.into(),
+        command: command.map(str::to_string),
+    };
+
+    // 1. Node.js
+    #[cfg(windows)]
+    {
+        let node = find_on_path("node.exe")
+            .or_else(|| {
+                let p = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
+                p.is_file().then_some(p)
+            });
+        if node.is_none() {
+            return bad(
+                "node",
+                "Node.js 가 설치되어 있지 않습니다",
+                "Story Vault 는 OpenAI Codex 로 원고를 작성합니다.\n\
+                 Codex 는 Node.js 위에서 도는 프로그램이라 먼저 Node.js 를 설치해야 합니다.\n\n\
+                 https://nodejs.org 에서 LTS 버전을 설치한 뒤 앱을 다시 실행해 주세요.",
+                None,
+            );
+        }
+    }
+
+    // 2. Codex 설치
+    let (program, lead) = codex_invocation();
+    if cfg!(windows) && lead.is_empty() {
+        // node 는 찾았는데 codex.js 를 못 찾은 경우다.
+        return bad(
+            "codex",
+            "Codex 가 설치되어 있지 않습니다",
+            "아래 명령으로 Codex 를 설치한 뒤 앱을 다시 실행해 주세요.\n\
+             설치에는 몇 분 걸릴 수 있습니다.",
+            Some("npm install -g @openai/codex"),
+        );
+    }
+
+    // 3. 실행 가능 여부
+    let runs = std::process::Command::new(&program)
+        .args(&lead)
+        .arg("--version")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if !runs {
+        return bad(
+            "run",
+            "Codex 를 실행할 수 없습니다",
+            "Codex 가 설치되어 있지만 실행되지 않습니다.\n\
+             아래 명령으로 다시 설치해 보세요.",
+            Some("npm install -g @openai/codex"),
+        );
+    }
+
+    // 4. 로그인 / 요금제
+    let login = std::process::Command::new(&program)
+        .args(&lead)
+        .args(["login", "status"])
+        .output();
+
+    let logged_in = match login {
+        Ok(out) => {
+            // 종료 코드만으로 판단하지 않는다. 버전에 따라 로그아웃 상태에서도
+            // 0 을 돌려주는 경우가 있어 출력 문구를 함께 본다.
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+            .to_lowercase();
+            out.status.success() && !text.contains("not logged in") && !text.contains("no auth")
+        }
+        Err(_) => false,
+    };
+
+    if !logged_in {
+        return bad(
+            "login",
+            "Codex 에 로그인되어 있지 않습니다",
+            "Codex 를 쓰려면 OpenAI 계정 로그인과 사용 가능한 요금제가 필요합니다.\n\
+             터미널에서 아래 명령을 실행해 로그인한 뒤 앱을 다시 실행해 주세요.\n\n\
+             이미 로그인했는데도 이 안내가 나오면 요금제 사용량이 소진되었거나 \
+             결제가 만료된 상태일 수 있습니다.",
+            Some("codex login"),
+        );
+    }
+
+    CodexStatus {
+        ok: true,
+        stage: "ok".into(),
+        title: String::new(),
+        message: String::new(),
+        command: None,
+    }
+}
+
 /// Codex 에 처음 건네는 지시.
 ///
 /// Codex 는 AGENTS.md 를 자동으로 읽지만, 플랫폼 기준 문서는 스스로 찾지
@@ -1236,6 +1357,7 @@ pub fn run() {
             check_templates,
             upgrade_templates,
             codex_available,
+            codex_diagnose,
             terminal_spawn,
             terminal_write,
             terminal_resize,
