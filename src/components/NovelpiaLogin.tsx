@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { invoke } from '@tauri-apps/api/core'
+import SocialLoginFlow from './SocialLoginFlow'
 
 export interface Session {
   platform: string
@@ -18,16 +19,17 @@ export interface Session {
  *
  * 소셜(네이버·카카오) 계정은 이 경로로 로그인할 수 없다.
  */
+type Mode = 'email' | 'social'
+
 export default function NovelpiaLogin({
   session,
   onSession,
-  onOpenWebLogin,
 }: {
   session: Session | null
   onSession: (s: Session | null) => void
-  onOpenWebLogin: () => void
 }) {
   const [open, setOpen] = useState(false)
+  const [mode, setMode] = useState<Mode>('email')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
@@ -78,6 +80,35 @@ export default function NovelpiaLogin({
 
       {open && (
         <div className="np-popover">
+          <div className="tabs" role="tablist">
+            <button
+              className={mode === 'email' ? 'tab on' : 'tab'}
+              onClick={() => setMode('email')}
+              role="tab"
+              aria-selected={mode === 'email'}
+            >
+              이메일 로그인
+            </button>
+            <button
+              className={mode === 'social' ? 'tab on' : 'tab'}
+              onClick={() => setMode('social')}
+              role="tab"
+              aria-selected={mode === 'social'}
+            >
+              소셜 로그인
+            </button>
+          </div>
+
+          {mode === 'social' ? (
+            <SocialLoginFlow
+              onSession={(s) => {
+                onSession(s)
+                setOpen(false)
+              }}
+              onCancel={() => setOpen(false)}
+            />
+          ) : (
+          <>
           <form onSubmit={submit}>
             <label>
               이메일
@@ -123,17 +154,12 @@ export default function NovelpiaLogin({
           </p>
           <p className="note">
             네이버·카카오 등 <strong>소셜 계정은 이 방식으로 로그인할 수 없습니다.</strong>{' '}
-            <button
-              type="button"
-              className="linklike"
-              onClick={() => {
-                setOpen(false)
-                onOpenWebLogin()
-              }}
-            >
-              브라우저 로그인 창 열기
+            <button type="button" className="linklike" onClick={() => setMode('social')}>
+              소셜 로그인으로 전환
             </button>
           </p>
+          </>
+          )}
         </div>
       )}
     </div>

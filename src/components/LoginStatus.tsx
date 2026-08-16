@@ -53,13 +53,7 @@ export default function LoginStatus({ platform }: { platform: Platform | null })
 
   // 노벨피아는 앱 안에서 직접 인증한다.
   if (platform === 'novelpia') {
-    return (
-      <NovelpiaLogin
-        session={session}
-        onSession={setSession}
-        onOpenWebLogin={() => void openLoginWindow('novelpia')}
-      />
-    )
+    return <NovelpiaLogin session={session} onSession={setSession} />
   }
 
   // 조아라는 엔드포인트가 확인되지 않아 브라우저 로그인만 지원한다.
