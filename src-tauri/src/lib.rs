@@ -376,8 +376,16 @@ fn write_platform_guides(root: String, platforms: Vec<String>) -> Result<(), Str
                 "<!-- 이 파일은 앱이 자동 생성한다. 대상 플랫폼을 바꾸면 덮어쓰이거나 삭제된다. -->\n\
                  <!-- 기준: {label} -->\n\n"
             );
-            fs::write(&target, format!("{header}{contents}"))
-                .map_err(|e| format!("{rel} 쓰기 실패: {e}"))?;
+            let wanted = format!("{header}{contents}");
+
+            // vault 를 열 때마다 부르므로, 이미 같은 내용이면 건드리지 않는다.
+            // 77KB 를 매번 다시 쓸 이유가 없고 파일 시각도 흔들린다.
+            let same = fs::read_to_string(&target)
+                .map(|cur| cur.replace("\r\n", "\n") == wanted.replace("\r\n", "\n"))
+                .unwrap_or(false);
+            if !same {
+                fs::write(&target, wanted).map_err(|e| format!("{rel} 쓰기 실패: {e}"))?;
+            }
         } else if target.is_file() {
             fs::remove_file(&target).map_err(|e| format!("{rel} 삭제 실패: {e}"))?;
         }

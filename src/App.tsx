@@ -59,6 +59,17 @@ export default function App() {
       setPlatforms(found)
       // 아직 안 정했으면 설정 화면을 띄운다.
       setNeedSetup(found.length === 0)
+
+      // 기준 문서가 없으면 채워 넣는다.
+      //
+      // 예전에는 설정 대화상자에서 확정할 때만 썼는데, 그러면 이미
+      // 플랫폼이 정해진 vault 에는 영영 생기지 않았다. Codex 가
+      // reference/novelpia.md 를 못 찾는 원인이 이것이었다.
+      // 내용이 같으면 Rust 쪽에서 건너뛰므로 매번 불러도 된다.
+      if (found.length) {
+        await writePlatformGuides(r, found)
+        setTree(await listTree(r))
+      }
     } catch {
       setPlatforms([])
       setNeedSetup(false)
