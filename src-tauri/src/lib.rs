@@ -734,18 +734,64 @@ async fn is_logged_in(app: tauri::AppHandle, platform: String) -> Result<bool, S
 /// 반드시 사용자가 버튼을 눌러야 뜬다.
 const CODEX_FLAGS: &str = "--dangerously-bypass-approvals-and-sandbox";
 
-fn codex_command() -> &'static str {
-    if cfg!(windows) {
-        "codex.cmd"
-    } else {
-        "codex"
+/// Windows 의 확장 길이 경로(`\\?\C:\...`) 접두사를 벗긴다.
+///
+/// `canonicalize()` 는 이 형식을 돌려주는데, cmd.exe 는 이걸 작업
+/// 디렉터리로 받지 않고 조용히 `C:\Windows` 로 떨어진다. Codex 가
+/// vault 를 못 읽던 원인이 이것이었다.
+fn strip_extended(p: &Path) -> String {
+    let s = p.to_string_lossy().to_string();
+    s.strip_prefix(r"\\?\").map(str::to_string).unwrap_or(s)
+}
+
+/// Codex 를 실행할 명령과 앞에 붙는 인자.
+///
+/// npm 전역 설치의 `codex.cmd` 는 `node codex.js %*` 를 부르는 배치
+/// 래퍼일 뿐이다. 배치를 거치면 cmd.exe 가 끼어들어 두 가지가 깨진다.
+///   - `\\?\` 경로를 작업 디렉터리로 받지 못한다
+///   - 줄바꿈이 든 인자를 첫 줄에서 잘라 버린다
+/// 그래서 node 와 codex.js 를 찾을 수 있으면 직접 실행한다.
+fn find_on_path(exe: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(exe))
+        .find(|p| p.is_file())
+}
+
+fn codex_invocation() -> (String, Vec<String>) {
+    #[cfg(windows)]
+    {
+        // PATH 해석을 남에게 맡기지 않고 절대 경로로 못 박는다.
+        let node = find_on_path("node.exe")
+            .or_else(|| {
+                let p = PathBuf::from(r"C:\Program Files\nodejs\node.exe");
+                p.is_file().then_some(p)
+            });
+
+        if let (Some(node), Some(appdata)) = (node, std::env::var_os("APPDATA")) {
+            let js = Path::new(&appdata)
+                .join("npm/node_modules/@openai/codex/bin/codex.js");
+            if js.is_file() {
+                return (strip_extended(&node), vec![strip_extended(&js)]);
+            }
+        }
+        // 못 찾으면 배치 래퍼로 돌아간다. 이 경로에서는 브리핑이
+        // 첫 줄에서 잘릴 수 있다.
+        return ("codex.cmd".into(), Vec::new());
+    }
+
+    #[cfg(not(windows))]
+    {
+        ("codex".into(), Vec::new())
     }
 }
 
 /// Codex가 PATH에 있는지 확인한다.
 #[tauri::command]
 fn codex_available() -> bool {
-    std::process::Command::new(codex_command())
+    let (program, lead) = codex_invocation();
+    std::process::Command::new(program)
+        .args(&lead)
         .arg("--version")
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
@@ -849,9 +895,15 @@ fn terminal_spawn(
         })
         .map_err(|e| format!("PTY 생성 실패: {e}"))?;
 
-    let workdir = dir.to_string_lossy().replace(r"\\?\", "");
+    // `\\?\` 접두사를 반드시 벗긴다. 붙은 채로 넘기면 작업 디렉터리가
+    // 무시되고 C:\Windows 에서 실행된다.
+    let workdir = strip_extended(&dir);
 
-    let mut cmd = CommandBuilder::new(codex_command());
+    let (program, lead) = codex_invocation();
+    let mut cmd = CommandBuilder::new(program);
+    for a in &lead {
+        cmd.arg(a);
+    }
     cmd.arg(CODEX_FLAGS);
     // 작업 루트를 명시한다. 프로세스 cwd 만으로는 Codex 가 다른 루트를
     // 잡을 수 있어, 이전 대화나 다른 프로젝트로 새는 원인이 된다.
@@ -859,7 +911,7 @@ fn terminal_spawn(
     cmd.arg(&workdir);
     // 브리핑을 인자로 그대로 넘긴다. 셸을 거치지 않으므로 따옴표 처리가 필요 없다.
     cmd.arg(codex_briefing(platform.as_deref(), &workdir));
-    cmd.cwd(&dir);
+    cmd.cwd(&workdir);
 
     let child = pair
         .slave
@@ -1028,6 +1080,20 @@ mod tests {
         for p in [Some("novelpia"), Some("joara"), None] {
             assert!(codex_briefing(p, "E:/x").contains("AGENTS.md"));
         }
+    }
+
+    #[test]
+    fn 확장길이_경로_접두사를_벗긴다() {
+        use super::strip_extended;
+        use std::path::Path;
+        // canonicalize() 가 돌려주는 형식. 이대로 넘기면 cmd.exe 가
+        // 작업 디렉터리를 무시하고 C:\Windows 로 떨어진다.
+        assert_eq!(
+            strip_extended(Path::new(r"\\?\E:\소설\노벨피아")),
+            r"E:\소설\노벨피아"
+        );
+        // 이미 평범한 경로면 그대로 둔다.
+        assert_eq!(strip_extended(Path::new(r"E:\소설")), r"E:\소설");
     }
 
     #[test]
