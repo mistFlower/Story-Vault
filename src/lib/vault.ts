@@ -37,10 +37,6 @@ export const initVault = (path: string) => invoke<string>('init_vault', { path }
 /** Codex CLI가 설치되어 있는지. */
 export const codexAvailable = () => invoke<boolean>('codex_available')
 
-/** vault 디렉터리에서 Codex를 새 터미널 창으로 실행한다. */
-export const launchCodex = (root: string, platform: string | null) =>
-  invoke<void>('launch_codex', { root, platform })
-
 export interface TemplateStatus {
   vault_version: number
   app_version: number

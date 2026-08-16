@@ -600,60 +600,157 @@ pub fn codex_briefing(platform: Option<&str>) -> String {
     s
 }
 
-/// vault 디렉터리에서 Codex를 새 터미널 창으로 띄운다.
-///
-/// Codex는 대화형 TUI라서 앱 안에 출력만 받아오면 쓸 수 없다.
-/// 별도 콘솔 창을 열어 사용자가 직접 대화하게 한다.
+// ── 내장 터미널 ─────────────────────────────────────────────
+//
+// Codex 는 전체 화면 TUI 라서 출력만 받아오면 쓸 수 없다. PTY 를 열어
+// 앱 안의 xterm.js 와 연결한다.
+//
+// 셸을 거치지 않고 인자를 직접 넘기는 것이 중요하다. 예전에는
+// `cmd /C start ... cmd /K "codex --flags "프롬프트""` 로 띄웠는데,
+// 안쪽 따옴표가 먼저 닫혀 한국어 프롬프트가 토막나는 문제가 있었다.
+
+struct Terminal {
+    writer: Box<dyn std::io::Write + Send>,
+    master: Box<dyn portable_pty::MasterPty + Send>,
+    child: Box<dyn portable_pty::Child + Send + Sync>,
+}
+
+#[derive(Default)]
+pub struct TerminalState(std::sync::Mutex<Option<Terminal>>);
+
+/// vault 에서 Codex 를 PTY 로 띄운다. 출력은 `terminal:output` 이벤트로 흐른다.
 #[tauri::command]
-fn launch_codex(root: String, platform: Option<String>) -> Result<(), String> {
+fn terminal_spawn(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, TerminalState>,
+    root: String,
+    platform: Option<String>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    use portable_pty::{CommandBuilder, PtySize};
+    use tauri::Emitter;
+
     let dir = Path::new(&root)
         .canonicalize()
         .map_err(|e| format!("vault 경로를 찾을 수 없습니다: {e}"))?;
-
     if !dir.join("AGENTS.md").is_file() {
         return Err("AGENTS.md 가 없어 vault 로 보이지 않습니다".into());
     }
 
-    let briefing = codex_briefing(platform.as_deref());
+    // 이미 떠 있으면 정리하고 새로 띄운다.
+    terminal_kill(state.clone())?;
 
-    #[cfg(windows)]
-    {
-        // 지시문에 줄바꿈과 따옴표가 있어 명령줄에 그대로 실을 수 없다.
-        // 파일로 떨궈 두고 Codex 에게 그 파일을 읽으라고 시킨다.
-        let brief_path = dir.join(".codex-briefing.md");
-        fs::write(&brief_path, &briefing).map_err(|e| format!("지시문 작성 실패: {e}"))?;
+    let pty = portable_pty::native_pty_system();
+    let pair = pty
+        .openpty(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("PTY 생성 실패: {e}"))?;
 
-        let prompt = ".codex-briefing.md 를 읽고 그대로 따라라.";
+    let mut cmd = CommandBuilder::new(codex_command());
+    cmd.arg(CODEX_FLAGS);
+    // 브리핑을 인자로 그대로 넘긴다. 셸을 거치지 않으므로 따옴표 처리가 필요 없다.
+    cmd.arg(codex_briefing(platform.as_deref()));
+    cmd.cwd(&dir);
 
-        std::process::Command::new("cmd")
-            .args(["/C", "start", "Story Vault - Codex", "cmd", "/K"])
-            .arg(format!(
-                "{} {} \"{}\"",
-                codex_command(),
-                CODEX_FLAGS,
-                prompt
-            ))
-            .current_dir(&dir)
-            .spawn()
-            .map_err(|e| format!("Codex 실행 실패: {e}"))?;
-    }
+    let child = pair
+        .slave
+        .spawn_command(cmd)
+        .map_err(|e| format!("Codex 실행 실패: {e}. PATH 에 codex 가 있는지 확인하세요."))?;
 
-    #[cfg(not(windows))]
-    {
-        std::process::Command::new(codex_command())
-            .arg(CODEX_FLAGS)
-            .arg(&briefing)
-            .current_dir(&dir)
-            .spawn()
-            .map_err(|e| format!("Codex 실행 실패: {e}"))?;
-    }
+    let mut reader = pair
+        .master
+        .try_clone_reader()
+        .map_err(|e| format!("출력 연결 실패: {e}"))?;
+    let writer = pair
+        .master
+        .take_writer()
+        .map_err(|e| format!("입력 연결 실패: {e}"))?;
+
+    // 출력 펌프. 자식이 끝나면 스레드도 끝난다.
+    let handle = app.clone();
+    std::thread::spawn(move || {
+        let mut buf = [0u8; 8192];
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    // UTF-8 경계가 잘릴 수 있어 손실 허용 변환을 쓴다.
+                    let chunk = String::from_utf8_lossy(&buf[..n]).to_string();
+                    let _ = handle.emit("terminal:output", chunk);
+                }
+                Err(_) => break,
+            }
+        }
+        let _ = handle.emit("terminal:exit", ());
+    });
+
+    *state.0.lock().unwrap() = Some(Terminal {
+        writer,
+        master: pair.master,
+        child,
+    });
 
     Ok(())
 }
 
+/// 키 입력을 Codex 로 보낸다.
+#[tauri::command]
+fn terminal_write(state: tauri::State<'_, TerminalState>, data: String) -> Result<(), String> {
+    let mut guard = state.0.lock().unwrap();
+    let term = guard.as_mut().ok_or("터미널이 실행 중이 아닙니다")?;
+    term.writer
+        .write_all(data.as_bytes())
+        .map_err(|e| format!("입력 실패: {e}"))?;
+    term.writer.flush().map_err(|e| format!("입력 실패: {e}"))
+}
+
+/// 창 크기 변경을 알린다. TUI 는 이걸 못 받으면 화면이 깨진다.
+#[tauri::command]
+fn terminal_resize(
+    state: tauri::State<'_, TerminalState>,
+    cols: u16,
+    rows: u16,
+) -> Result<(), String> {
+    let guard = state.0.lock().unwrap();
+    let Some(term) = guard.as_ref() else {
+        return Ok(());
+    };
+    term.master
+        .resize(portable_pty::PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("크기 변경 실패: {e}"))
+}
+
+#[tauri::command]
+fn terminal_kill(state: tauri::State<'_, TerminalState>) -> Result<(), String> {
+    if let Some(mut term) = state.0.lock().unwrap().take() {
+        let _ = term.child.kill();
+        let _ = term.child.wait();
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn terminal_running(state: tauri::State<'_, TerminalState>) -> bool {
+    state.0.lock().unwrap().is_some()
+}
+
+use std::io::Read;
+
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let mut builder = tauri::Builder::default()
+        .manage(TerminalState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
@@ -675,7 +772,11 @@ pub fn run() {
             check_templates,
             upgrade_templates,
             codex_available,
-            launch_codex,
+            terminal_spawn,
+            terminal_write,
+            terminal_resize,
+            terminal_kill,
+            terminal_running,
             open_login_window,
             is_logged_in
         ])

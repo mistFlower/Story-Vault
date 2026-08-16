@@ -5,6 +5,7 @@ import CountBar from './components/CountBar'
 import UpdateBanner from './components/UpdateBanner'
 import LoginStatus from './components/LoginStatus'
 import TemplateBanner from './components/TemplateBanner'
+import CodexTerminal from './components/CodexTerminal'
 import {
   listTree,
   readFile,
@@ -14,7 +15,6 @@ import {
   loadSavedRoot,
   saveRoot,
   codexAvailable,
-  launchCodex,
   inspectFolder,
   initVault,
   writePlatformGuide,
@@ -35,6 +35,7 @@ export default function App() {
   const [status, setStatus] = useState<string | null>(null)
   const [platform, setPlatform] = useState<Platform | null>(null)
   const [hasCodex, setHasCodex] = useState(false)
+  const [showTerminal, setShowTerminal] = useState(false)
 
   const dirty = text !== savedText
   const dirtyRef = useRef(dirty)
@@ -184,17 +185,8 @@ export default function App() {
     }
     if (dirtyRef.current) await save()
 
-    try {
-      await launchCodex(root, platform)
-      setStatus(
-        platform
-          ? `Codex 실행됨 (${PLATFORM_LABEL[platform]} 기준)`
-          : 'Codex 실행됨 (플랫폼 미설정)',
-      )
-      setTimeout(() => setStatus(null), 2500)
-    } catch (e) {
-      setError(String(e))
-    }
+    // 앱 안의 터미널에서 띄운다. 패널이 마운트되면서 PTY 를 연다.
+    setShowTerminal(true)
     // save 는 아래에서 정의되므로 의존성에서 제외한다 (ref 로 최신 상태를 읽는다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [root, platform])
@@ -274,17 +266,17 @@ export default function App() {
         <div className="spacer" />
         {status && <span className="status">{status}</span>}
         <button
-          className="codex"
-          onClick={() => void runCodex()}
+          className={showTerminal ? 'codex on' : 'codex'}
+          onClick={() => (showTerminal ? setShowTerminal(false) : void runCodex())}
           disabled={!hasCodex}
           title={
             hasCodex
-              ? 'vault 폴더에서 Codex를 새 터미널 창으로 실행합니다.\n' +
+              ? 'vault 폴더에서 Codex를 앱 안의 터미널로 실행합니다.\n' +
                 '승인 절차와 샌드박스가 꺼진 상태로 실행됩니다.'
               : 'Codex CLI가 설치되어 있지 않습니다 (npm i -g @openai/codex)'
           }
         >
-          Codex 실행
+          {showTerminal ? 'Codex 닫기' : 'Codex 실행'}
         </button>
         <button onClick={() => void save()} disabled={!selected || !dirty}>
           저장 {dirty && '•'}
@@ -308,6 +300,13 @@ export default function App() {
         </aside>
 
         <main className="main">
+          {showTerminal && (
+            <CodexTerminal
+              root={root}
+              platform={platform}
+              onClose={() => setShowTerminal(false)}
+            />
+          )}
           {selected ? (
             <>
               <div className="filename">

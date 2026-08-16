@@ -424,6 +424,65 @@ button.small {
   font-size: 12px;
 }
 
+/* 내장 Codex 터미널 */
+.terminal-panel {
+  flex: none;
+  height: 45%;
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg);
+}
+.terminal-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.terminal-head .title {
+  font-weight: 600;
+  color: var(--accent);
+}
+.terminal-head .ctx {
+  color: var(--fg-dim);
+  font-size: 11px;
+}
+.terminal-head .spacer {
+  flex: 1;
+}
+.dot-run {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #55555f;
+}
+.dot-run.on {
+  background: var(--ok);
+}
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+  overflow: hidden;
+}
+.terminal-error {
+  flex: none;
+  padding: 6px 10px;
+  background: #3a1f1d;
+  color: var(--err);
+  font-size: 12px;
+}
+.topbar button.codex.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10101a;
+}
+
 .template-banner {
   flex: none;
   display: flex;
