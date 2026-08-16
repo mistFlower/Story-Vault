@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { renderWork, renderMetrics, applyWorkMeta, type Work } from './works'
-import { parsePlatform } from './platform'
+import { parsePlatforms } from './platform'
 
 const WORK: Work = {
   id: '12345',
@@ -88,7 +88,7 @@ describe('applyWorkMeta', () => {
   })
 
   it('대상 플랫폼 줄을 건드리지 않는다', () => {
-    expect(parsePlatform(applyWorkMeta(TEMPLATE, WORK))).toBe('novelpia')
+    expect(parsePlatforms(applyWorkMeta(TEMPLATE, WORK))).toEqual(['novelpia'])
   })
 
   it('회차 수를 모르면 그 줄은 그대로 둔다', () => {

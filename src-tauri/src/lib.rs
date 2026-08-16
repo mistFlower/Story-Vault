@@ -223,17 +223,25 @@ fn template_contents(rel: &str) -> Option<&'static str> {
     TEMPLATE.iter().find(|(p, _)| *p == rel).map(|(_, c)| *c)
 }
 
-/// vault 에 기록된 판 번호를 읽는다. 표시가 없으면 1 (최초 판).
+/// vault 의 판 번호를 읽는다. 표시가 없으면 1 (최초 판).
+///
+/// 별도 상태 파일을 두지 않는다. 이 도구는 md 파일만으로 굴러가야 하므로
+/// 판 번호도 AGENTS.md 첫 줄 주석에 둔다. 템플릿을 갱신하면 그 주석까지
+/// 함께 갱신되므로 따로 기록할 것도 없다.
+///
+///     <!-- story-vault-template: 2 -->
 fn read_vault_version(dir: &Path) -> u32 {
-    fs::read_to_string(dir.join(".story-vault-version"))
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
+    let Ok(text) = fs::read_to_string(dir.join("AGENTS.md")) else {
+        return 1;
+    };
+    text.lines()
+        .take(5)
+        .find_map(|l| {
+            let l = l.trim();
+            let rest = l.strip_prefix("<!-- story-vault-template:")?;
+            rest.trim_end_matches("-->").trim().parse().ok()
+        })
         .unwrap_or(1)
-}
-
-fn write_vault_version(dir: &Path, v: u32) -> Result<(), String> {
-    fs::write(dir.join(".story-vault-version"), v.to_string())
-        .map_err(|e| format!("판 번호 기록 실패: {e}"))
 }
 
 #[derive(Serialize)]
@@ -329,7 +337,6 @@ fn upgrade_templates(root: String, files: Vec<String>) -> Result<Vec<String>, St
         done.push(rel.clone());
     }
 
-    write_vault_version(&dir, TEMPLATE_VERSION)?;
     Ok(done)
 }
 
@@ -341,37 +348,41 @@ fn upgrade_templates(root: String, files: Vec<String>) -> Result<Vec<String>, St
 const GUIDE_NOVELPIA: &str = include_str!("../../docs/research/novelpia-codex-research.md");
 const GUIDE_JOARA: &str = include_str!("../../docs/research/joara-codex-research.md");
 
-/// vault 안에서 플랫폼 기준 문서가 놓이는 자리.
-const GUIDE_PATH: &str = "reference/PLATFORM_GUIDE.md";
-
-fn guide_for(platform: &str) -> Result<&'static str, String> {
+fn guide_for(platform: &str) -> Result<(&'static str, &'static str, &'static str), String> {
     match platform {
-        "novelpia" => Ok(GUIDE_NOVELPIA),
-        "joara" => Ok(GUIDE_JOARA),
+        // (파일명, 라벨, 본문)
+        "novelpia" => Ok(("reference/novelpia.md", "노벨피아", GUIDE_NOVELPIA)),
+        "joara" => Ok(("reference/joara.md", "조아라", GUIDE_JOARA)),
         other => Err(format!("알 수 없는 플랫폼입니다: {other}")),
     }
 }
 
-/// 선택한 플랫폼의 기준 문서를 vault 에 써넣는다.
+const ALL_PLATFORMS: &[&str] = &["novelpia", "joara"];
+
+/// 선택한 플랫폼들의 기준 문서를 vault 에 써넣고, 선택 해제된 것은 지운다.
 ///
-/// 플랫폼을 바꾸면 덮어쓴다 — 두 플랫폼의 기준이 섞이면 안 되기 때문이다.
+/// 남겨 두면 Codex 가 대상이 아닌 플랫폼 기준을 읽고 섞어 쓸 수 있다.
 #[tauri::command]
-fn write_platform_guide(root: String, platform: String) -> Result<(), String> {
-    let contents = guide_for(&platform)?;
-    let target = resolve(&root, GUIDE_PATH)?;
+fn write_platform_guides(root: String, platforms: Vec<String>) -> Result<(), String> {
+    for p in ALL_PLATFORMS {
+        let (rel, label, contents) = guide_for(p)?;
+        let target = resolve(&root, rel)?;
 
-    if let Some(parent) = target.parent() {
-        fs::create_dir_all(parent).map_err(|e| format!("디렉터리 생성 실패: {e}"))?;
+        if platforms.iter().any(|s| s == p) {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("디렉터리 생성 실패: {e}"))?;
+            }
+            let header = format!(
+                "<!-- 이 파일은 앱이 자동 생성한다. 대상 플랫폼을 바꾸면 덮어쓰이거나 삭제된다. -->\n\
+                 <!-- 기준: {label} -->\n\n"
+            );
+            fs::write(&target, format!("{header}{contents}"))
+                .map_err(|e| format!("{rel} 쓰기 실패: {e}"))?;
+        } else if target.is_file() {
+            fs::remove_file(&target).map_err(|e| format!("{rel} 삭제 실패: {e}"))?;
+        }
     }
-
-    let label = if platform == "novelpia" { "노벨피아" } else { "조아라" };
-    let header = format!(
-        "<!-- 이 파일은 앱이 자동 생성한다. 대상 플랫폼을 바꾸면 덮어쓰인다. -->\n\
-         <!-- 현재 기준: {label} -->\n\n"
-    );
-
-    fs::write(&target, format!("{header}{contents}"))
-        .map_err(|e| format!("기준 문서 쓰기 실패: {e}"))
+    Ok(())
 }
 
 /// 폴더가 새 vault 를 만들기에 적합한지 살펴본다.
@@ -442,9 +453,6 @@ fn init_vault(path: String) -> Result<String, String> {
     for rel in TEMPLATE_DIRS {
         fs::create_dir_all(dir.join(rel)).map_err(|e| format!("{rel}: 디렉터리 생성 실패: {e}"))?;
     }
-
-    // 새로 만든 vault 는 당연히 최신 판이다.
-    write_vault_version(dir, TEMPLATE_VERSION)?;
 
     dir.canonicalize()
         .map(|p| p.to_string_lossy().to_string())
@@ -804,7 +812,9 @@ fn codex_available() -> bool {
 ///
 /// Codex 는 AGENTS.md 를 자동으로 읽지만, 플랫폼 기준 문서는 스스로 찾지
 /// 않는다. 어떤 플랫폼인지와 어느 파일을 읽어야 하는지 명시해 준다.
-pub fn codex_briefing(platform: Option<&str>, workdir: &str) -> String {
+pub fn codex_briefing_multi(platforms: &[String], workdir: &str) -> String {
+    let has = |p: &str| platforms.iter().any(|s| s == p);
+
     let mut s = format!(
         "작업 폴더는 {workdir} 이다. 이 폴더 안에서만 작업한다.\n\
          다른 프로젝트나 이전 대화의 주제로 넘어가지 않는다.\n\n\
@@ -813,22 +823,31 @@ pub fn codex_briefing(platform: Option<&str>, workdir: &str) -> String {
          2. PLATFORM.md — 대상 플랫폼과 분량 기준.\n"
     );
 
-    match platform {
-        Some("novelpia") => s.push_str(
-            "3. reference/PLATFORM_GUIDE.md — 노벨피아 연재 기준 리서치 원문.\n\n\
+    match (has("novelpia"), has("joara")) {
+        (true, true) => s.push_str(
+            "3. reference/novelpia.md, reference/joara.md — 두 플랫폼의 연재 기준 원문.\n\n\
+             이 작품은 **노벨피아와 조아라에 동시 연재**한다.\n\
+             두 플랫폼은 분량 산정 단위가 다르므로 한 회차가 양쪽 기준을 모두 만족해야 한다.\n\
+             - 노벨피아: 집계 기준(공백과 마침표·따옴표·느낌표·물음표 제외) 3,300~4,200자\n\
+             - 조아라: KB 용량. 회차당 10KB 이상, 평균 12KB 이상\n\
+             조아라 기준이 더 길다. 조아라를 만족시키면 노벨피아는 대체로 넘지만, \
+             반대는 성립하지 않으므로 조아라 기준을 우선 맞춘다.\n",
+        ),
+        (true, false) => s.push_str(
+            "3. reference/novelpia.md — 노벨피아 연재 기준 리서치 원문.\n\n\
              이 작품은 **노벨피아**에 연재한다.\n\
              분량은 노벨피아 집계 기준(공백과 마침표·따옴표·느낌표·물음표 제외) \
              3,300~4,200자를 목표로 한다. 집계 규칙이 공식적으로 완전히 공개되어 있지 \
              않으므로 기준선에 아슬아슬하게 맞추지 말고 여유를 둔다.\n",
         ),
-        Some("joara") => s.push_str(
-            "3. reference/PLATFORM_GUIDE.md — 조아라 연재 기준 리서치 원문.\n\n\
+        (false, true) => s.push_str(
+            "3. reference/joara.md — 조아라 연재 기준 리서치 원문.\n\n\
              이 작품은 **조아라**에 연재한다.\n\
              조아라는 글자 수가 아니라 KB 용량으로 분량을 센다. 회차당 10KB 이상, \
              평균 12KB 이상이 기준이다. 한글 1자를 2바이트로 보면 대략 5,000~6,000자다. \
              업로드 직전에 실제 용량을 반드시 확인한다.\n",
         ),
-        _ => s.push_str(
+        (false, false) => s.push_str(
             "\n대상 플랫폼이 아직 정해지지 않았다. \
              회차를 작성하기 전에 사용자에게 노벨피아인지 조아라인지 먼저 물어라. \
              두 플랫폼은 분량 산정 단위가 달라 임의로 추정하면 안 된다.\n",
@@ -836,7 +855,9 @@ pub fn codex_briefing(platform: Option<&str>, workdir: &str) -> String {
     }
 
     s.push_str(
-        "\n설정을 임의로 확정하지 마라. canon/ 이 비어 있으면 먼저 사용자와 함께 채운다.\n\
+        "\n원고는 episodes/drafts/ 에 쓴다. episodes/published/ 는 이미 공개된 정본이라 \
+         명시적 지시 없이 수정하지 않는다.\n\
+         설정을 임의로 확정하지 마라. canon/ 이 비어 있으면 먼저 사용자와 함께 채운다.\n\
          이 프로젝트와 무관한 조사나 개발 작업은 하지 않는다.\n\
          준비되면 무엇부터 할지 물어라.",
     );
@@ -868,7 +889,7 @@ fn terminal_spawn(
     app: tauri::AppHandle,
     state: tauri::State<'_, TerminalState>,
     root: String,
-    platform: Option<String>,
+    platforms: Vec<String>,
     cols: u16,
     rows: u16,
 ) -> Result<(), String> {
@@ -910,7 +931,7 @@ fn terminal_spawn(
     cmd.arg("--cd");
     cmd.arg(&workdir);
     // 브리핑을 인자로 그대로 넘긴다. 셸을 거치지 않으므로 따옴표 처리가 필요 없다.
-    cmd.arg(codex_briefing(platform.as_deref(), &workdir));
+    cmd.arg(codex_briefing_multi(&platforms, &workdir));
     cmd.cwd(&workdir);
 
     let child = pair
@@ -1025,7 +1046,7 @@ pub fn run() {
             find_vault_root,
             inspect_folder,
             init_vault,
-            write_platform_guide,
+            write_platform_guides,
             check_templates,
             upgrade_templates,
             codex_available,
@@ -1047,11 +1068,16 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::codex_briefing;
+    use super::codex_briefing_multi;
+
+    fn brief(ps: &[&str], dir: &str) -> String {
+        let owned: Vec<String> = ps.iter().map(|s| s.to_string()).collect();
+        codex_briefing_multi(&owned, dir)
+    }
 
     #[test]
     fn 노벨피아는_글자수_기준을_알려준다() {
-        let s = codex_briefing(Some("novelpia"), "E:/x");
+        let s = brief(&["novelpia"], "E:/x");
         assert!(s.contains("노벨피아"));
         assert!(s.contains("3,300~4,200자"));
         // 조아라 기준이 섞이면 안 된다
@@ -1060,7 +1086,7 @@ mod tests {
 
     #[test]
     fn 조아라는_KB_기준을_알려준다() {
-        let s = codex_briefing(Some("joara"), "E:/x");
+        let s = brief(&["joara"], "E:/x");
         assert!(s.contains("조아라"));
         assert!(s.contains("10KB"));
         // 노벨피아 목표치가 섞이면 안 된다
@@ -1069,7 +1095,7 @@ mod tests {
 
     #[test]
     fn 미설정이면_먼저_물어보게_한다() {
-        let s = codex_briefing(None, "E:/x");
+        let s = brief(&[], "E:/x");
         assert!(s.contains("먼저 물어라"));
         assert!(!s.contains("3,300"));
         assert!(!s.contains("10KB"));
@@ -1077,8 +1103,8 @@ mod tests {
 
     #[test]
     fn 항상_agents_md_를_먼저_읽게_한다() {
-        for p in [Some("novelpia"), Some("joara"), None] {
-            assert!(codex_briefing(p, "E:/x").contains("AGENTS.md"));
+        for p in [&["novelpia"][..], &["joara"][..], &[][..]] {
+            assert!(brief(p, "E:/x").contains("AGENTS.md"));
         }
     }
 
@@ -1097,14 +1123,29 @@ mod tests {
     }
 
     #[test]
+    fn 두_곳_동시연재는_양쪽_기준을_모두_알린다() {
+        let s = brief(&["novelpia", "joara"], "E:/x");
+        assert!(s.contains("동시 연재"));
+        assert!(s.contains("3,300~4,200자"));
+        assert!(s.contains("10KB"));
+        // 더 긴 쪽을 우선하라고 알려야 한다
+        assert!(s.contains("조아라 기준을 우선"));
+    }
+
+    #[test]
+    fn 원고를_drafts_에_쓰라고_지시한다() {
+        assert!(brief(&["novelpia"], "E:/x").contains("episodes/drafts/"));
+    }
+
+    #[test]
     fn 작업_폴더를_명시한다() {
-        let s = codex_briefing(Some("novelpia"), "E:/소설/노벨피아");
+        let s = brief(&["novelpia"], "E:/소설/노벨피아");
         assert!(s.contains("E:/소설/노벨피아"));
         assert!(s.contains("이 폴더 안에서만 작업한다"));
     }
 
     #[test]
     fn 설정을_임의로_확정하지_말라고_지시한다() {
-        assert!(codex_briefing(Some("novelpia"), "E:/x").contains("임의로 확정하지 마라"));
+        assert!(brief(&["novelpia"], "E:/x").contains("임의로 확정하지 마라"));
     }
 }

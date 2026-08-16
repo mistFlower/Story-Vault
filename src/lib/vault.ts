@@ -54,9 +54,9 @@ export const checkTemplates = (root: string) =>
 export const upgradeTemplates = (root: string, files: string[]) =>
   invoke<string[]>('upgrade_templates', { root, files })
 
-/** 선택한 플랫폼의 기준 문서를 vault/reference/ 에 써넣는다. */
-export const writePlatformGuide = (root: string, platform: string) =>
-  invoke<void>('write_platform_guide', { root, platform })
+/** 선택한 플랫폼들의 기준 문서를 vault/reference/ 에 써넣고, 해제된 것은 지운다. */
+export const writePlatformGuides = (root: string, platforms: string[]) =>
+  invoke<void>('write_platform_guides', { root, platforms })
 
 /** 플랫폼 로그인 창을 연다. 로그인은 사용자가 직접 수행한다. */
 export const openLoginWindow = (platform: string) =>

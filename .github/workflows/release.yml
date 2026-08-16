@@ -55,6 +55,13 @@ jobs:
 
       - run: npm ci
 
+      # Rust 테스트는 여기서 돈다. 개발 PC 의 mingw 툴체인에서는 테스트
+      # 바이너리가 STATUS_ENTRYPOINT_NOT_FOUND 로 죽어 로컬 실행이
+      # 불가능하다. CI 는 MSVC 라 정상 동작한다.
+      # 빌드보다 먼저 돌려 실패 시 릴리스가 나가지 않게 한다.
+      - name: Rust 테스트
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
       # 커밋마다 버전을 올려야 업데이터가 새 버전으로 인식한다.
       # run_number 는 단조 증가하므로 패치 번호로 그대로 쓴다.
       - name: 버전 결정

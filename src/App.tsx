@@ -3,7 +3,8 @@ import { open } from '@tauri-apps/plugin-dialog'
 import FileTree from './components/FileTree'
 import CountBar from './components/CountBar'
 import UpdateBanner from './components/UpdateBanner'
-import LoginStatus from './components/LoginStatus'
+import LoginPanel from './components/LoginPanel'
+import PlatformSetup from './components/PlatformSetup'
 import TemplateBanner from './components/TemplateBanner'
 import CodexTerminal from './components/CodexTerminal'
 import {
@@ -17,10 +18,10 @@ import {
   codexAvailable,
   inspectFolder,
   initVault,
-  writePlatformGuide,
+  writePlatformGuides,
   type Entry,
 } from './lib/vault'
-import { parsePlatform, applyPlatform, PLATFORM_LABEL } from './lib/platform'
+import { parsePlatforms, applyPlatforms, describe } from './lib/platform'
 import type { Platform } from './lib/count'
 
 const PLATFORM_FILE = 'PLATFORM.md'
@@ -33,7 +34,8 @@ export default function App() {
   const [savedText, setSavedText] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [status, setStatus] = useState<string | null>(null)
-  const [platform, setPlatform] = useState<Platform | null>(null)
+  const [platforms, setPlatforms] = useState<Platform[]>([])
+  const [needSetup, setNeedSetup] = useState(false)
   const [hasCodex, setHasCodex] = useState(false)
   const [showTerminal, setShowTerminal] = useState(false)
 
@@ -50,28 +52,45 @@ export default function App() {
   }, [])
 
   // 대상 플랫폼은 PLATFORM.md 에 있다. 앱과 집필 규칙이 같은 값을 봐야 한다.
-  const loadPlatform = useCallback(async (r: string) => {
+  // DB 를 두지 않고 md 파일 하나를 진실의 원천으로 삼는다.
+  const loadPlatforms = useCallback(async (r: string) => {
     try {
-      setPlatform(parsePlatform(await readFile(r, PLATFORM_FILE)))
+      const found = parsePlatforms(await readFile(r, PLATFORM_FILE))
+      setPlatforms(found)
+      // 아직 안 정했으면 설정 화면을 띄운다.
+      setNeedSetup(found.length === 0)
     } catch {
-      setPlatform(null)
+      setPlatforms([])
+      setNeedSetup(false)
     }
   }, [])
 
-  const changePlatform = useCallback(
-    async (next: Platform) => {
-      if (!root) return
+  /**
+   * 플랫폼을 확정한다. 한 번만 부를 수 있다 — 이미 정해져 있으면 거부한다.
+   * 노벨피아는 글자 수, 조아라는 KB 라 산정 단위가 달라서, 연재 도중
+   * 바꾸면 이미 쓴 회차가 기준에서 어긋난다.
+   */
+  const confirmPlatforms = useCallback(
+    async (picked: Platform[]) => {
+      if (!root || !picked.length) return
       try {
         const current = await readFile(root, PLATFORM_FILE)
-        await writeFile(root, PLATFORM_FILE, applyPlatform(current, next))
+        if (parsePlatforms(current).length > 0) {
+          setError('이미 플랫폼이 정해져 있어 변경할 수 없습니다.')
+          setNeedSetup(false)
+          return
+        }
+
+        await writeFile(root, PLATFORM_FILE, applyPlatforms(current, picked))
 
         // Codex 가 읽을 수 있도록 해당 플랫폼의 리서치 원문을 vault 에 넣는다.
         // vault 는 저장소 밖에 있을 수 있어 docs/research/ 를 참조할 수 없다.
-        await writePlatformGuide(root, next)
+        await writePlatformGuides(root, picked)
 
-        setPlatform(next)
-        setStatus(`대상 플랫폼: ${PLATFORM_LABEL[next]} · 기준 문서 갱신`)
-        setTimeout(() => setStatus(null), 2200)
+        setPlatforms(picked)
+        setNeedSetup(false)
+        setStatus(`연재 플랫폼: ${describe(picked)}`)
+        setTimeout(() => setStatus(null), 2500)
         await refreshTree(root)
 
         // 열려 있는 파일이 PLATFORM.md 라면 화면도 갱신한다.
@@ -100,11 +119,11 @@ export default function App() {
         if (ok) {
           setRoot(saved)
           void refreshTree(saved)
-          void loadPlatform(saved)
+          void loadPlatforms(saved)
         }
       })
       .catch(() => {})
-  }, [refreshTree, loadPlatform])
+  }, [refreshTree, loadPlatforms])
 
   async function pickVault() {
     const picked = await open({ directory: true, title: 'vault 폴더 선택' })
@@ -146,7 +165,7 @@ export default function App() {
     setText('')
     setSavedText('')
     await refreshTree(found)
-    await loadPlatform(found)
+    await loadPlatforms(found)
   }
 
   async function openFile(path: string) {
@@ -189,7 +208,7 @@ export default function App() {
     setShowTerminal(true)
     // save 는 아래에서 정의되므로 의존성에서 제외한다 (ref 로 최신 상태를 읽는다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root, platform])
+  }, [root, platforms])
 
   // Ctrl+S 저장
   useEffect(() => {
@@ -242,26 +261,33 @@ export default function App() {
           if (selected) void openFile(selected)
         }}
       />
+      {needSetup && (
+        <PlatformSetup
+          vaultName={root.split(/[\/]/).pop() ?? root}
+          onConfirm={(ps) => void confirmPlatforms(ps)}
+          onCancel={() => setNeedSetup(false)}
+        />
+      )}
       <header className="topbar">
         <span className="root" title={root}>
           {root.split(/[\\/]/).pop()}
         </span>
 
-        <div className="platform-picker" role="group" aria-label="대상 플랫폼">
-          {(['novelpia', 'joara'] as const).map((p) => (
-            <button
-              key={p}
-              className={platform === p ? 'seg on' : 'seg'}
-              onClick={() => void changePlatform(p)}
-              title={`대상 플랫폼을 ${PLATFORM_LABEL[p]}로 설정 (PLATFORM.md 에 기록)`}
-            >
-              {PLATFORM_LABEL[p]}
-            </button>
-          ))}
-          {platform === null && <span className="unset">미설정</span>}
-        </div>
+        {/* 플랫폼은 작품 시작 시 한 번 정하고 바꾸지 않는다. 표시만 한다. */}
+        <span
+          className={platforms.length ? 'platform-fixed' : 'platform-fixed unset'}
+          title={
+            platforms.length
+              ? '연재 플랫폼은 작품 시작 시 확정되며 변경할 수 없습니다.\n' +
+                '분량 산정 단위가 달라 도중에 바꾸면 기존 회차가 어긋납니다.'
+              : '아직 정해지지 않았습니다.'
+          }
+        >
+          {platforms.length ? '🔒 ' : ''}
+          {describe(platforms)}
+        </span>
 
-        <LoginStatus platform={platform} />
+        <LoginPanel platforms={platforms} />
 
         <div className="spacer" />
         {status && <span className="status">{status}</span>}
@@ -303,7 +329,7 @@ export default function App() {
           {showTerminal && (
             <CodexTerminal
               root={root}
-              platform={platform}
+              platforms={platforms}
               onClose={() => setShowTerminal(false)}
             />
           )}
@@ -336,7 +362,7 @@ export default function App() {
         </div>
       )}
 
-      <CountBar text={selected ? text : ''} platform={platform} />
+      <CountBar text={selected ? text : ''} platforms={platforms} />
     </div>
   )
 }

@@ -54,18 +54,18 @@ function Gauge({
 
 export default function CountBar({
   text,
-  platform,
+  platforms,
 }: {
   text: string
-  /** 선택된 대상 플랫폼. null이면 둘 다 동등하게 보여준다. */
-  platform: Platform | null
+  /** 선택된 대상 플랫폼들. 비어 있으면 둘 다 동등하게 보여준다. */
+  platforms: Platform[]
 }) {
   const counts = countAll(text)
 
   return (
     <footer className="countbar">
-      <Gauge platform="novelpia" text={text} active={platform !== 'joara'} />
-      <Gauge platform="joara" text={text} active={platform !== 'novelpia'} />
+      <Gauge platform="novelpia" text={text} active={platforms.length === 0 || platforms.includes('novelpia')} />
+      <Gauge platform="joara" text={text} active={platforms.length === 0 || platforms.includes('joara')} />
       <div className="raw">
         <div>
           <span>전체</span>

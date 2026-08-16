@@ -155,6 +155,140 @@ button.small {
   background: #22283d;
 }
 
+/* 확정된 연재 플랫폼 (변경 불가) */
+.platform-fixed {
+  margin-left: 12px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  font-size: 11.5px;
+  color: var(--fg);
+  white-space: nowrap;
+}
+.platform-fixed.unset {
+  color: var(--warn);
+  border-color: #4a4128;
+}
+
+/* 로그인 패널 */
+.login-panel {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.login-panel .slot {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.login-panel .step {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  color: var(--fg-dim);
+  font-size: 9px;
+  display: grid;
+  place-items: center;
+  margin-left: 8px;
+}
+
+/* 플랫폼 최초 설정 */
+.setup-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  background: rgba(10, 10, 14, 0.72);
+  display: grid;
+  place-items: center;
+}
+.setup {
+  width: 420px;
+  max-width: calc(100vw - 40px);
+  padding: 22px 24px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+.setup h2 {
+  margin: 0 0 4px;
+  font-size: 17px;
+}
+.setup .sub {
+  margin: 0 0 16px;
+  font-size: 12px;
+  color: var(--fg-dim);
+}
+.setup code {
+  font-family: var(--mono);
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.setup .choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.setup .choice {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  gap: 2px 10px;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  cursor: pointer;
+}
+.setup .choice:hover {
+  border-color: #45455a;
+}
+.setup .choice.on {
+  border-color: var(--accent);
+  background: #1e2033;
+}
+.setup .choice input {
+  grid-row: 1 / 3;
+  align-self: center;
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent);
+}
+.setup .choice .name {
+  font-size: 13px;
+  font-weight: 600;
+}
+.setup .choice .desc {
+  font-size: 11px;
+  color: var(--fg-dim);
+}
+.setup .info {
+  margin: 14px 0 0;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: #1c2430;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--fg-dim);
+}
+.setup .warn {
+  margin: 12px 0 16px;
+  padding: 9px 11px;
+  border-radius: 6px;
+  background: #2a2618;
+  border: 1px solid #4a4128;
+  font-size: 11px;
+  line-height: 1.65;
+  color: var(--warn);
+}
+.setup .row {
+  display: flex;
+  gap: 8px;
+}
+
 /* 대상 플랫폼 선택 */
 .platform-picker {
   display: flex;

@@ -4,7 +4,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { invoke } from '@tauri-apps/api/core'
 import { listen } from '@tauri-apps/api/event'
 import '@xterm/xterm/css/xterm.css'
-import { PLATFORM_LABEL } from '../lib/platform'
+import { describe } from '../lib/platform'
 import type { Platform } from '../lib/count'
 
 /**
@@ -17,11 +17,11 @@ import type { Platform } from '../lib/count'
  */
 export default function CodexTerminal({
   root,
-  platform,
+  platforms,
   onClose,
 }: {
   root: string
-  platform: Platform | null
+  platforms: Platform[]
   onClose: () => void
 }) {
   const hostRef = useRef<HTMLDivElement>(null)
@@ -89,7 +89,7 @@ export default function CodexTerminal({
       try {
         await invoke('terminal_spawn', {
           root,
-          platform,
+          platforms,
           cols: term.cols,
           rows: term.rows,
         })
@@ -110,7 +110,7 @@ export default function CodexTerminal({
       term.dispose()
       termRef.current = null
     }
-  }, [root, platform])
+  }, [root, platforms])
 
   async function restart() {
     const term = termRef.current
@@ -120,7 +120,7 @@ export default function CodexTerminal({
     try {
       await invoke('terminal_spawn', {
         root,
-        platform,
+        platforms,
         cols: term.cols,
         rows: term.rows,
       })
@@ -136,7 +136,7 @@ export default function CodexTerminal({
       <header className="terminal-head">
         <span className="title">Codex</span>
         <span className="ctx">
-          {platform ? PLATFORM_LABEL[platform] : '플랫폼 미설정'} · {root.split(/[\\/]/).pop()}
+          {platforms.length ? describe(platforms) : '플랫폼 미설정'} · {root.split(/[\\/]/).pop()}
         </span>
         <span className={running ? 'dot-run on' : 'dot-run'} title={running ? '실행 중' : '종료됨'} />
         <div className="spacer" />
