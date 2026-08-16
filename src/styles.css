@@ -1,0 +1,366 @@
+:root {
+  --bg: #16161a;
+  --bg-2: #1c1c21;
+  --bg-3: #232329;
+  --line: #2e2e36;
+  --fg: #e6e6ea;
+  --fg-dim: #9a9aa5;
+  --accent: #7c8cff;
+  --ok: #4ec98a;
+  --warn: #e5b567;
+  --err: #e5695f;
+  --mono: ui-monospace, 'Cascadia Code', Consolas, monospace;
+  --sans: 'Pretendard', -apple-system, 'Segoe UI', 'Malgun Gothic', sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 14px;
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: var(--fg);
+  background: var(--bg-3);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+button.ghost {
+  background: transparent;
+}
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #10101a;
+  font-weight: 600;
+  padding: 9px 20px;
+}
+
+/* ── 시작 화면 ───────────────────────────── */
+
+.empty {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+}
+.empty h1 {
+  margin: 0;
+  font-size: 28px;
+  letter-spacing: -0.02em;
+}
+.empty p {
+  margin: 0;
+  color: var(--fg-dim);
+}
+.empty .hint {
+  font-size: 12px;
+}
+.empty code {
+  font-family: var(--mono);
+  background: var(--bg-3);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+.error {
+  color: var(--err);
+}
+
+/* ── 레이아웃 ────────────────────────────── */
+
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--bg-2);
+  flex: none;
+}
+.topbar .root {
+  font-weight: 600;
+}
+.topbar .spacer {
+  flex: 1;
+}
+.topbar .status {
+  color: var(--ok);
+  font-size: 12px;
+}
+
+.body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+
+.sidebar {
+  width: 240px;
+  flex: none;
+  border-right: 1px solid var(--line);
+  background: var(--bg-2);
+  overflow-y: auto;
+}
+
+.main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.filename {
+  padding: 7px 14px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.placeholder {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  color: var(--fg-dim);
+}
+
+.editor {
+  flex: 1;
+  width: 100%;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--sans);
+  font-size: 16px;
+  line-height: 1.85;
+  padding: 24px 32px;
+}
+
+/* ── 파일 트리 ───────────────────────────── */
+
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tree .node {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+  padding: 4px 8px;
+  color: var(--fg-dim);
+  font-size: 13px;
+}
+.tree .node:hover {
+  background: var(--bg-3);
+  border-color: transparent;
+}
+.tree .node.dir {
+  font-weight: 600;
+  color: var(--fg);
+}
+.tree .node.selected {
+  background: var(--bg-3);
+  color: var(--accent);
+}
+.tree .caret {
+  width: 10px;
+  font-size: 10px;
+}
+
+.dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--warn);
+  display: inline-block;
+}
+
+/* ── 분량 게이지 ─────────────────────────── */
+
+.countbar {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 20px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--line);
+  background: var(--bg-2);
+}
+
+.gauge {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.gauge-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.gauge .platform {
+  font-size: 12px;
+  color: var(--fg-dim);
+  width: 52px;
+  flex: none;
+}
+.gauge .value {
+  font-family: var(--mono);
+  font-size: 17px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.gauge .unit {
+  font-size: 11px;
+  color: var(--fg-dim);
+  margin-left: 2px;
+}
+.gauge .verdict {
+  margin-left: auto;
+  font-size: 11px;
+}
+.gauge.below .verdict {
+  color: var(--warn);
+}
+.gauge.ok .verdict {
+  color: var(--ok);
+}
+.gauge.above .verdict {
+  color: var(--fg-dim);
+}
+
+.bar {
+  position: relative;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--bg-3);
+  overflow: hidden;
+}
+.bar .fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.12s linear;
+}
+.gauge.below .fill {
+  background: var(--warn);
+}
+.gauge.ok .fill {
+  background: var(--ok);
+}
+.gauge.above .fill {
+  background: var(--accent);
+}
+.bar .min-mark {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 100%;
+  background: var(--fg-dim);
+  opacity: 0.7;
+}
+
+.gauge .range {
+  font-size: 10px;
+  color: var(--fg-dim);
+}
+
+.raw {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  font-size: 11px;
+  color: var(--fg-dim);
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  padding-left: 20px;
+  border-left: 1px solid var(--line);
+}
+.raw div {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+.raw span {
+  color: #6a6a75;
+}
+
+/* ── 배너 ────────────────────────────────── */
+
+.update-banner {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: var(--accent);
+  color: #10101a;
+  font-size: 13px;
+  font-weight: 500;
+}
+.update-banner button {
+  background: rgba(0, 0, 0, 0.18);
+  border-color: transparent;
+  color: #10101a;
+  padding: 3px 10px;
+  font-size: 12px;
+}
+
+.error-bar {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  background: #3a1f1d;
+  color: var(--err);
+  font-size: 12px;
+}
+.error-bar button {
+  margin-left: auto;
+  color: var(--err);
+}
