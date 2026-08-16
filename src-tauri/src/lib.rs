@@ -463,6 +463,12 @@ struct PlatformSite {
     login_url: &'static str,
     /// 로그인 성공 시 세션 쿠키가 설정되는 도메인
     domain: &'static str,
+    /// 세션을 담는 쿠키 이름.
+    ///
+    /// 노벨피아의 LOGINKEY 는 오픈소스 구현들에서 확인된 값이다.
+    /// 조아라는 공개된 자료가 없어 아직 모른다 — None 이면 도메인의
+    /// 아무 쿠키나 있으면 로그인된 것으로 느슨하게 본다.
+    session_cookie: Option<&'static str>,
 }
 
 fn platform_site(platform: &str) -> Result<PlatformSite, String> {
@@ -471,14 +477,203 @@ fn platform_site(platform: &str) -> Result<PlatformSite, String> {
             label: "노벨피아",
             login_url: "https://novelpia.com/login/",
             domain: "novelpia.com",
+            session_cookie: Some("LOGINKEY"),
         }),
         "joara" => Ok(PlatformSite {
             label: "조아라",
             login_url: "https://www.joara.com/login",
             domain: "joara.com",
+            session_cookie: None,
         }),
         other => Err(format!("알 수 없는 플랫폼입니다: {other}")),
     }
+}
+
+/// 로그인 창에서 얻은 세션.
+#[derive(Serialize, Clone)]
+pub struct Session {
+    platform: String,
+    /// 세션 쿠키 이름 (노벨피아면 LOGINKEY)
+    name: String,
+    /// 값은 프런트엔드로 보내지 않는다. 화면에 띄울 이유가 없고,
+    /// 웹뷰 콘솔이나 로그로 새어나갈 여지를 만들지 않기 위해서다.
+    ///
+    /// 작가 페이지 조회 요청에 실어 보낼 값이다. 조회 계층이 아직 없어
+    /// 지금은 읽는 곳이 없다.
+    #[serde(skip)]
+    #[allow(dead_code)]
+    value: String,
+    /// 사람이 보기 위한 가림 표시 (앞 4자리만)
+    masked: String,
+}
+
+#[derive(Default)]
+pub struct SessionState(std::sync::Mutex<Option<Session>>);
+
+/// 로그인 창의 쿠키에서 세션을 꺼내 보관한다.
+///
+/// 이 값이 있으면 이후 작가 페이지 요청에 그대로 실어 보낼 수 있다.
+/// 비밀번호를 앱이 받지 않고도 인증된 요청이 가능해진다.
+#[tauri::command]
+async fn capture_session(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, SessionState>,
+    platform: String,
+) -> Result<Option<Session>, String> {
+    let site = platform_site(&platform)?;
+
+    let Some(win) = app.get_webview_window(&format!("login-{platform}")) else {
+        return Ok(None);
+    };
+
+    let cookies = win.cookies().map_err(|e| format!("쿠키 조회 실패: {e}"))?;
+
+    let on_domain = |c: &tauri::webview::Cookie<'_>| {
+        c.domain()
+            .map(|d| d.trim_start_matches('.').ends_with(site.domain))
+            .unwrap_or(false)
+    };
+
+    let found = match site.session_cookie {
+        // 이름을 아는 플랫폼은 그 쿠키만 집는다.
+        Some(name) => cookies
+            .iter()
+            .find(|c| on_domain(c) && c.name() == name)
+            .map(|c| (c.name().to_string(), c.value().to_string())),
+        // 모르는 플랫폼은 값이 충분히 긴 쿠키를 세션으로 추정한다.
+        None => cookies
+            .iter()
+            .filter(|c| on_domain(c) && c.value().len() >= 16)
+            .max_by_key(|c| c.value().len())
+            .map(|c| (c.name().to_string(), c.value().to_string())),
+    };
+
+    let Some((name, value)) = found else {
+        return Ok(None);
+    };
+
+    let masked = format!("{}…", value.chars().take(4).collect::<String>());
+    let session = Session {
+        platform: platform.clone(),
+        name,
+        value,
+        masked,
+    };
+
+    *state.0.lock().unwrap() = Some(session.clone());
+    Ok(Some(session))
+}
+
+/// 현재 보관 중인 세션 정보 (값 제외).
+#[tauri::command]
+fn current_session(state: tauri::State<'_, SessionState>) -> Option<Session> {
+    state.0.lock().unwrap().clone()
+}
+
+#[tauri::command]
+fn clear_session(state: tauri::State<'_, SessionState>) {
+    *state.0.lock().unwrap() = None;
+}
+
+// ── 국내 노벨피아 직접 로그인 ───────────────────────────────
+//
+// 노벨피아는 공개 API 가 없다. 아래는 오픈소스 구현들에서 확인된
+// 비공식 엔드포인트이며, 사이트가 개편되면 예고 없이 깨진다.
+//
+// LOGINKEY 는 서버가 주는 것이 아니라 클라이언트가 만들어 보내는 값이다.
+// 로그인이 성공하면 서버가 그 값을 세션에 묶어 준다.
+//
+// 비밀번호는 이 요청에만 쓰고 어디에도 저장하지 않는다. 앱이 보관하는
+// 것은 발급된 LOGINKEY 뿐이다.
+
+const NOVELPIA_LOGIN_URL: &str = "https://novelpia.com/proc/login";
+
+/// 노벨피아가 기대하는 형태의 LOGINKEY 를 만든다. (32자리 hex 두 개)
+fn generate_loginkey() -> String {
+    use rand::Rng;
+    let mut rng = rand::thread_rng();
+    let hex32 = |rng: &mut rand::rngs::ThreadRng| {
+        (0..32)
+            .map(|_| std::char::from_digit(rng.gen_range(0..16), 16).unwrap())
+            .collect::<String>()
+    };
+    let a = hex32(&mut rng);
+    let b = hex32(&mut rng);
+    format!("{a}_{b}")
+}
+
+/// 이메일/비밀번호로 국내 노벨피아에 로그인한다.
+///
+/// 소셜(네이버·카카오) 계정은 이 경로로 로그인할 수 없다.
+/// 그 경우 로그인 창(WebView)을 쓰고 capture_session 으로 세션을 가져온다.
+#[tauri::command]
+async fn novelpia_login(
+    state: tauri::State<'_, SessionState>,
+    email: String,
+    password: String,
+) -> Result<Session, String> {
+    if email.trim().is_empty() || password.is_empty() {
+        return Err("이메일과 비밀번호를 입력하세요.".into());
+    }
+
+    let loginkey = generate_loginkey();
+
+    let client = reqwest::Client::builder()
+        // 리다이렉트를 따라가면 판정용 본문을 놓친다.
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("HTTP 클라이언트 생성 실패: {e}"))?;
+
+    let res = client
+        .post(NOVELPIA_LOGIN_URL)
+        .header("Cookie", format!("LOGINKEY={loginkey};"))
+        .header(
+            "User-Agent",
+            "Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
+        )
+        .header("Referer", "https://novelpia.com/login/")
+        .form(&[
+            ("email", email.as_str()),
+            ("wd", password.as_str()),
+            ("redirectrurl", ""),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("노벨피아에 연결하지 못했습니다: {e}"))?;
+
+    let status = res.status();
+    let body = res
+        .text()
+        .await
+        .map_err(|e| format!("응답을 읽지 못했습니다: {e}"))?;
+
+    // 오픈소스 구현들이 쓰는 성공 판정. 사이트가 바뀌면 이 문자열도 바뀐다.
+    if !body.contains("감사합니다") {
+        // 서버가 이유를 알려주는 경우가 있어 앞부분을 함께 보여준다.
+        let hint = body
+            .chars()
+            .filter(|c| !c.is_control())
+            .take(120)
+            .collect::<String>();
+        return Err(if status.is_success() {
+            format!("로그인에 실패했습니다. 이메일과 비밀번호를 확인하세요.\n서버 응답: {hint}")
+        } else {
+            format!("로그인에 실패했습니다 (HTTP {status}).\n서버 응답: {hint}")
+        });
+    }
+
+    let masked = format!("{}…", loginkey.chars().take(4).collect::<String>());
+    let session = Session {
+        platform: "novelpia".into(),
+        name: "LOGINKEY".into(),
+        value: loginkey,
+        masked,
+    };
+
+    *state.0.lock().unwrap() = Some(session.clone());
+    Ok(session)
 }
 
 /// 플랫폼 로그인 창을 연다. 로그인은 사용자가 직접 수행한다.
@@ -751,6 +946,7 @@ use std::io::Read;
 pub fn run() {
     let mut builder = tauri::Builder::default()
         .manage(TerminalState::default())
+        .manage(SessionState::default())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_process::init());
 
@@ -778,7 +974,11 @@ pub fn run() {
             terminal_kill,
             terminal_running,
             open_login_window,
-            is_logged_in
+            is_logged_in,
+            capture_session,
+            current_session,
+            clear_session,
+            novelpia_login
         ])
         .run(tauri::generate_context!())
         .expect("Story Vault 실행에 실패했습니다");

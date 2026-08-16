@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
+import { invoke } from '@tauri-apps/api/core'
 import { openLoginWindow, isLoggedIn } from '../lib/vault'
 import { PLATFORM_LABEL } from '../lib/platform'
 import type { Platform } from '../lib/count'
+import NovelpiaLogin, { type Session } from './NovelpiaLogin'
 
 /**
  * 플랫폼 로그인 상태 표시.
@@ -12,6 +14,14 @@ import type { Platform } from '../lib/count'
 export default function LoginStatus({ platform }: { platform: Platform | null }) {
   const [logged, setLogged] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [session, setSession] = useState<Session | null>(null)
+
+  // 앱을 껐다 켜면 세션이 사라진다 (메모리에만 둔다).
+  useEffect(() => {
+    invoke<Session | null>('current_session')
+      .then(setSession)
+      .catch(() => setSession(null))
+  }, [])
 
   const check = useCallback(async () => {
     if (!platform) {
@@ -41,6 +51,18 @@ export default function LoginStatus({ platform }: { platform: Platform | null })
 
   if (!platform) return null
 
+  // 노벨피아는 앱 안에서 직접 인증한다.
+  if (platform === 'novelpia') {
+    return (
+      <NovelpiaLogin
+        session={session}
+        onSession={setSession}
+        onOpenWebLogin={() => void openLoginWindow('novelpia')}
+      />
+    )
+  }
+
+  // 조아라는 엔드포인트가 확인되지 않아 브라우저 로그인만 지원한다.
   return (
     <div className="login-status">
       <span className={logged ? 'badge on' : 'badge'}>
