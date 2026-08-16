@@ -206,6 +206,174 @@ const TEMPLATE: &[(&str, &str)] = &[
 /// 원고가 들어갈 빈 디렉터리.
 const TEMPLATE_DIRS: &[&str] = &["episodes/published", "episodes/drafts"];
 
+/// 앱이 관리하는 파일의 판 번호.
+///
+/// 집필 규칙이나 명령 템플릿을 고칠 때마다 올린다. 기존 vault 는
+/// init_vault 가 건드리지 않으므로, 이 번호로 낡은 vault 를 찾아내
+/// 사용자에게 갱신 여부를 묻는다.
+const TEMPLATE_VERSION: u32 = 2;
+
+/// 앱이 관리하는 파일 — 갱신 대상.
+///
+/// 사용자 창작물(canon/, plot/, state/, episodes/)은 여기 넣지 않는다.
+/// 그쪽은 어떤 경우에도 앱이 덮어쓰지 않는다.
+const MANAGED: &[&str] = &["AGENTS.md", "prompts/COMMANDS.md"];
+
+fn template_contents(rel: &str) -> Option<&'static str> {
+    TEMPLATE.iter().find(|(p, _)| *p == rel).map(|(_, c)| *c)
+}
+
+/// vault 에 기록된 판 번호를 읽는다. 표시가 없으면 1 (최초 판).
+fn read_vault_version(dir: &Path) -> u32 {
+    fs::read_to_string(dir.join(".story-vault-version"))
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(1)
+}
+
+fn write_vault_version(dir: &Path, v: u32) -> Result<(), String> {
+    fs::write(dir.join(".story-vault-version"), v.to_string())
+        .map_err(|e| format!("판 번호 기록 실패: {e}"))
+}
+
+#[derive(Serialize)]
+pub struct TemplateStatus {
+    vault_version: u32,
+    app_version: u32,
+    /// 내용이 최신 템플릿과 다른 관리 파일
+    outdated: Vec<String>,
+    /// 그중 사용자가 손댄 것으로 보이는 파일 (덮어쓰면 편집분이 사라짐)
+    modified: Vec<String>,
+}
+
+/// 관리 파일이 최신인지 확인한다.
+#[tauri::command]
+fn check_templates(root: String) -> Result<TemplateStatus, String> {
+    let dir = Path::new(&root);
+    let vault_version = read_vault_version(dir);
+
+    let mut outdated = Vec::new();
+    let mut modified = Vec::new();
+
+    for rel in MANAGED {
+        let Some(latest) = template_contents(rel) else {
+            continue;
+        };
+        let path = dir.join(rel);
+        let Ok(current) = fs::read_to_string(&path) else {
+            // 파일 자체가 없으면 낡은 것으로 본다.
+            outdated.push((*rel).to_string());
+            continue;
+        };
+
+        // 개행 차이(CRLF/LF)는 무시한다.
+        let norm = |s: &str| s.replace("\r\n", "\n");
+        if norm(&current) != norm(latest) {
+            outdated.push((*rel).to_string());
+
+            // 판 번호가 이미 최신인데 내용이 다르면 사용자가 고친 것이다.
+            if vault_version >= TEMPLATE_VERSION {
+                modified.push((*rel).to_string());
+            }
+        }
+    }
+
+    Ok(TemplateStatus {
+        vault_version,
+        app_version: TEMPLATE_VERSION,
+        outdated,
+        modified,
+    })
+}
+
+/// 관리 파일을 최신 템플릿으로 갱신한다.
+///
+/// 기존 파일은 archive/ 에 백업한다. 사용자가 규칙을 고쳐 뒀을 수 있고,
+/// 그것을 말없이 날리면 안 되기 때문이다.
+#[tauri::command]
+fn upgrade_templates(root: String, files: Vec<String>) -> Result<Vec<String>, String> {
+    let dir = Path::new(&root)
+        .canonicalize()
+        .map_err(|e| format!("vault 경로를 찾을 수 없습니다: {e}"))?;
+
+    let mut done = Vec::new();
+
+    for rel in &files {
+        if !MANAGED.contains(&rel.as_str()) {
+            return Err(format!("갱신 대상이 아닌 파일입니다: {rel}"));
+        }
+        let Some(latest) = template_contents(rel) else {
+            continue;
+        };
+
+        let target = resolve(&root, rel)?;
+
+        // 기존 내용이 있으면 백업한다.
+        if let Ok(current) = fs::read_to_string(&target) {
+            let backup_name = format!(
+                "{}.v{}.bak",
+                rel.replace('/', "_"),
+                read_vault_version(&dir)
+            );
+            let backup = dir.join("archive").join(backup_name);
+            if let Some(parent) = backup.parent() {
+                fs::create_dir_all(parent).map_err(|e| format!("백업 폴더 생성 실패: {e}"))?;
+            }
+            fs::write(&backup, current).map_err(|e| format!("백업 실패: {e}"))?;
+        }
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(|e| format!("디렉터리 생성 실패: {e}"))?;
+        }
+        fs::write(&target, latest).map_err(|e| format!("{rel}: 쓰기 실패: {e}"))?;
+        done.push(rel.clone());
+    }
+
+    write_vault_version(&dir, TEMPLATE_VERSION)?;
+    Ok(done)
+}
+
+/// 플랫폼별 집필 기준 리서치 원문. 앱에 굽는다.
+///
+/// 새 vault 는 저장소 밖(예: E:\소설\노벨피아)에 만들어지므로
+/// docs/research/ 를 참조할 수 없다. 선택한 플랫폼의 문서를 vault 안에
+/// 써넣어야 Codex 가 읽을 수 있다.
+const GUIDE_NOVELPIA: &str = include_str!("../../docs/research/novelpia-codex-research.md");
+const GUIDE_JOARA: &str = include_str!("../../docs/research/joara-codex-research.md");
+
+/// vault 안에서 플랫폼 기준 문서가 놓이는 자리.
+const GUIDE_PATH: &str = "reference/PLATFORM_GUIDE.md";
+
+fn guide_for(platform: &str) -> Result<&'static str, String> {
+    match platform {
+        "novelpia" => Ok(GUIDE_NOVELPIA),
+        "joara" => Ok(GUIDE_JOARA),
+        other => Err(format!("알 수 없는 플랫폼입니다: {other}")),
+    }
+}
+
+/// 선택한 플랫폼의 기준 문서를 vault 에 써넣는다.
+///
+/// 플랫폼을 바꾸면 덮어쓴다 — 두 플랫폼의 기준이 섞이면 안 되기 때문이다.
+#[tauri::command]
+fn write_platform_guide(root: String, platform: String) -> Result<(), String> {
+    let contents = guide_for(&platform)?;
+    let target = resolve(&root, GUIDE_PATH)?;
+
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| format!("디렉터리 생성 실패: {e}"))?;
+    }
+
+    let label = if platform == "novelpia" { "노벨피아" } else { "조아라" };
+    let header = format!(
+        "<!-- 이 파일은 앱이 자동 생성한다. 대상 플랫폼을 바꾸면 덮어쓰인다. -->\n\
+         <!-- 현재 기준: {label} -->\n\n"
+    );
+
+    fs::write(&target, format!("{header}{contents}"))
+        .map_err(|e| format!("기준 문서 쓰기 실패: {e}"))
+}
+
 /// 폴더가 새 vault 를 만들기에 적합한지 살펴본다.
 #[derive(Serialize)]
 pub struct VaultCandidate {
@@ -274,6 +442,9 @@ fn init_vault(path: String) -> Result<String, String> {
     for rel in TEMPLATE_DIRS {
         fs::create_dir_all(dir.join(rel)).map_err(|e| format!("{rel}: 디렉터리 생성 실패: {e}"))?;
     }
+
+    // 새로 만든 vault 는 당연히 최신 판이다.
+    write_vault_version(dir, TEMPLATE_VERSION)?;
 
     dir.canonicalize()
         .map(|p| p.to_string_lossy().to_string())
@@ -388,12 +559,53 @@ fn codex_available() -> bool {
         .unwrap_or(false)
 }
 
+/// Codex 에 처음 건네는 지시.
+///
+/// Codex 는 AGENTS.md 를 자동으로 읽지만, 플랫폼 기준 문서는 스스로 찾지
+/// 않는다. 어떤 플랫폼인지와 어느 파일을 읽어야 하는지 명시해 준다.
+pub fn codex_briefing(platform: Option<&str>) -> String {
+    let mut s = String::from(
+        "이 저장소는 웹소설 장기 연재 프로젝트다. 작업을 시작하기 전에 다음을 읽어라.\n\n\
+         1. AGENTS.md — 집필과 편집의 절대 규칙. 여기 적힌 것을 그대로 따른다.\n\
+         2. PLATFORM.md — 대상 플랫폼과 분량 기준.\n",
+    );
+
+    match platform {
+        Some("novelpia") => s.push_str(
+            "3. reference/PLATFORM_GUIDE.md — 노벨피아 연재 기준 리서치 원문.\n\n\
+             이 작품은 **노벨피아**에 연재한다.\n\
+             분량은 노벨피아 집계 기준(공백과 마침표·따옴표·느낌표·물음표 제외) \
+             3,300~4,200자를 목표로 한다. 집계 규칙이 공식적으로 완전히 공개되어 있지 \
+             않으므로 기준선에 아슬아슬하게 맞추지 말고 여유를 둔다.\n",
+        ),
+        Some("joara") => s.push_str(
+            "3. reference/PLATFORM_GUIDE.md — 조아라 연재 기준 리서치 원문.\n\n\
+             이 작품은 **조아라**에 연재한다.\n\
+             조아라는 글자 수가 아니라 KB 용량으로 분량을 센다. 회차당 10KB 이상, \
+             평균 12KB 이상이 기준이다. 한글 1자를 2바이트로 보면 대략 5,000~6,000자다. \
+             업로드 직전에 실제 용량을 반드시 확인한다.\n",
+        ),
+        _ => s.push_str(
+            "\n대상 플랫폼이 아직 정해지지 않았다. \
+             회차를 작성하기 전에 사용자에게 노벨피아인지 조아라인지 먼저 물어라. \
+             두 플랫폼은 분량 산정 단위가 달라 임의로 추정하면 안 된다.\n",
+        ),
+    }
+
+    s.push_str(
+        "\n설정을 임의로 확정하지 마라. canon/ 이 비어 있으면 먼저 사용자와 함께 채운다.\n\
+         준비되면 무엇부터 할지 물어라.",
+    );
+
+    s
+}
+
 /// vault 디렉터리에서 Codex를 새 터미널 창으로 띄운다.
 ///
 /// Codex는 대화형 TUI라서 앱 안에 출력만 받아오면 쓸 수 없다.
 /// 별도 콘솔 창을 열어 사용자가 직접 대화하게 한다.
 #[tauri::command]
-fn launch_codex(root: String) -> Result<(), String> {
+fn launch_codex(root: String, platform: Option<String>) -> Result<(), String> {
     let dir = Path::new(&root)
         .canonicalize()
         .map_err(|e| format!("vault 경로를 찾을 수 없습니다: {e}"))?;
@@ -402,13 +614,25 @@ fn launch_codex(root: String) -> Result<(), String> {
         return Err("AGENTS.md 가 없어 vault 로 보이지 않습니다".into());
     }
 
+    let briefing = codex_briefing(platform.as_deref());
+
     #[cfg(windows)]
     {
-        // `start` 는 cmd 내장 명령이라 cmd 를 거쳐야 한다.
-        // 첫 따옴표 인자는 창 제목으로 소비되므로 빈 제목을 넣어준다.
+        // 지시문에 줄바꿈과 따옴표가 있어 명령줄에 그대로 실을 수 없다.
+        // 파일로 떨궈 두고 Codex 에게 그 파일을 읽으라고 시킨다.
+        let brief_path = dir.join(".codex-briefing.md");
+        fs::write(&brief_path, &briefing).map_err(|e| format!("지시문 작성 실패: {e}"))?;
+
+        let prompt = ".codex-briefing.md 를 읽고 그대로 따라라.";
+
         std::process::Command::new("cmd")
             .args(["/C", "start", "Story Vault - Codex", "cmd", "/K"])
-            .arg(format!("{} {}", codex_command(), CODEX_FLAGS))
+            .arg(format!(
+                "{} {} \"{}\"",
+                codex_command(),
+                CODEX_FLAGS,
+                prompt
+            ))
             .current_dir(&dir)
             .spawn()
             .map_err(|e| format!("Codex 실행 실패: {e}"))?;
@@ -418,6 +642,7 @@ fn launch_codex(root: String) -> Result<(), String> {
     {
         std::process::Command::new(codex_command())
             .arg(CODEX_FLAGS)
+            .arg(&briefing)
             .current_dir(&dir)
             .spawn()
             .map_err(|e| format!("Codex 실행 실패: {e}"))?;
@@ -446,6 +671,9 @@ pub fn run() {
             find_vault_root,
             inspect_folder,
             init_vault,
+            write_platform_guide,
+            check_templates,
+            upgrade_templates,
             codex_available,
             launch_codex,
             open_login_window,
@@ -453,4 +681,47 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("Story Vault 실행에 실패했습니다");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::codex_briefing;
+
+    #[test]
+    fn 노벨피아는_글자수_기준을_알려준다() {
+        let s = codex_briefing(Some("novelpia"));
+        assert!(s.contains("노벨피아"));
+        assert!(s.contains("3,300~4,200자"));
+        // 조아라 기준이 섞이면 안 된다
+        assert!(!s.contains("KB"));
+    }
+
+    #[test]
+    fn 조아라는_KB_기준을_알려준다() {
+        let s = codex_briefing(Some("joara"));
+        assert!(s.contains("조아라"));
+        assert!(s.contains("10KB"));
+        // 노벨피아 목표치가 섞이면 안 된다
+        assert!(!s.contains("3,300~4,200자"));
+    }
+
+    #[test]
+    fn 미설정이면_먼저_물어보게_한다() {
+        let s = codex_briefing(None);
+        assert!(s.contains("먼저 물어라"));
+        assert!(!s.contains("3,300"));
+        assert!(!s.contains("10KB"));
+    }
+
+    #[test]
+    fn 항상_agents_md_를_먼저_읽게_한다() {
+        for p in [Some("novelpia"), Some("joara"), None] {
+            assert!(codex_briefing(p).contains("AGENTS.md"));
+        }
+    }
+
+    #[test]
+    fn 설정을_임의로_확정하지_말라고_지시한다() {
+        assert!(codex_briefing(Some("novelpia")).contains("임의로 확정하지 마라"));
+    }
 }

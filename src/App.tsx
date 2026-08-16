@@ -4,6 +4,7 @@ import FileTree from './components/FileTree'
 import CountBar from './components/CountBar'
 import UpdateBanner from './components/UpdateBanner'
 import LoginStatus from './components/LoginStatus'
+import TemplateBanner from './components/TemplateBanner'
 import {
   listTree,
   readFile,
@@ -16,6 +17,7 @@ import {
   launchCodex,
   inspectFolder,
   initVault,
+  writePlatformGuide,
   type Entry,
 } from './lib/vault'
 import { parsePlatform, applyPlatform, PLATFORM_LABEL } from './lib/platform'
@@ -61,9 +63,15 @@ export default function App() {
       try {
         const current = await readFile(root, PLATFORM_FILE)
         await writeFile(root, PLATFORM_FILE, applyPlatform(current, next))
+
+        // Codex 가 읽을 수 있도록 해당 플랫폼의 리서치 원문을 vault 에 넣는다.
+        // vault 는 저장소 밖에 있을 수 있어 docs/research/ 를 참조할 수 없다.
+        await writePlatformGuide(root, next)
+
         setPlatform(next)
-        setStatus(`대상 플랫폼: ${PLATFORM_LABEL[next]}`)
-        setTimeout(() => setStatus(null), 1800)
+        setStatus(`대상 플랫폼: ${PLATFORM_LABEL[next]} · 기준 문서 갱신`)
+        setTimeout(() => setStatus(null), 2200)
+        await refreshTree(root)
 
         // 열려 있는 파일이 PLATFORM.md 라면 화면도 갱신한다.
         if (selected === PLATFORM_FILE) {
@@ -75,7 +83,7 @@ export default function App() {
         setError(String(e))
       }
     },
-    [root, selected],
+    [root, selected, refreshTree],
   )
 
   useEffect(() => {
@@ -177,15 +185,19 @@ export default function App() {
     if (dirtyRef.current) await save()
 
     try {
-      await launchCodex(root)
-      setStatus('Codex 실행됨')
-      setTimeout(() => setStatus(null), 2000)
+      await launchCodex(root, platform)
+      setStatus(
+        platform
+          ? `Codex 실행됨 (${PLATFORM_LABEL[platform]} 기준)`
+          : 'Codex 실행됨 (플랫폼 미설정)',
+      )
+      setTimeout(() => setStatus(null), 2500)
     } catch (e) {
       setError(String(e))
     }
     // save 는 아래에서 정의되므로 의존성에서 제외한다 (ref 로 최신 상태를 읽는다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [root])
+  }, [root, platform])
 
   // Ctrl+S 저장
   useEffect(() => {
@@ -230,6 +242,14 @@ export default function App() {
   return (
     <div className="app">
       <UpdateBanner />
+      <TemplateBanner
+        root={root}
+        onUpgraded={() => {
+          void refreshTree(root)
+          // 열려 있는 파일이 갱신 대상이었다면 화면도 다시 읽는다.
+          if (selected) void openFile(selected)
+        }}
+      />
       <header className="topbar">
         <span className="root" title={root}>
           {root.split(/[\\/]/).pop()}

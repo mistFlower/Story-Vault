@@ -16,3 +16,6 @@ Desktop.ini
 
 # 서명 개인키 — 절대 커밋 금지
 /.secrets/
+
+# 빌드 산출물 (릴리스는 GitHub 에 있다)
+/build/
